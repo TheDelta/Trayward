@@ -27,13 +27,13 @@
     "test": "cargo test --locked && python -m unittest discover -s scripts/tests"
   },
   "devDependencies": {
-    "@commitlint/cli": "21.2.3",
-    "@commitlint/config-conventional": "21.2.3",
-    "@cspell/dict-de-de": "4.1.2",
-    "cspell": "10.3.6",
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@cspell/dict-de-de": "4.1.3",
+    "cspell": "10.4.1",
     "husky": "9.1.7",
     "lint-staged": "17.6.0",
-    "markdownlint-cli2": "0.23.3",
-    "prettier": "3.9.9"
+    "markdownlint-cli2": "0.24.1",
+    "prettier": "3.10.1"
   }
 }
