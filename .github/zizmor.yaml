@@ -1,0 +1,7 @@
+# zizmor (workflow security), used by npm run check, the pre-commit hook and CI
+rules:
+  dependabot-cooldown:
+    config:
+      # 3 days, like .npmrc's min-release-age: long enough for a hijacked release to
+      # be caught and pulled, short enough for fixes
+      days: 3

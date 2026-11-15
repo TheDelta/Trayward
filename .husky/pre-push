@@ -1,0 +1,2 @@
+echo "🐕 husky pre-push: Clippy and the tests (Rust, release scripts)..."
+cargo clippy --all-targets --locked -- -D warnings && npm test && echo "✅ husky pre-push: Clippy and tests passed"

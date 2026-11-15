@@ -1,0 +1,211 @@
+//! What the app remembers across restarts: the last usage numbers and the
+//! tracked sessions, in `%LOCALAPPDATA%\Trayward\state.json`.
+
+use crate::sessions::Sessions;
+use crate::usage::Usage;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct Saved {
+    pub usage: Option<Usage>,
+    /// When `usage` was fetched (unix seconds).
+    pub fetched_at: Option<i64>,
+    /// Name of the subscription plan, e.g. "Ultra".
+    #[serde(default)]
+    pub plan: Option<String>,
+    /// Readings of the weekly limit, for the daily budget and pace.
+    #[serde(default)]
+    pub history: Vec<crate::forecast::Sample>,
+    #[serde(default)]
+    pub sessions: Sessions,
+    /// Limit warnings already shown: (which, the window's reset time).
+    #[serde(default)]
+    pub warned: Vec<(String, i64)>,
+    /// Notifications are snoozed until then (unix seconds).
+    #[serde(default)]
+    pub snoozed_until: Option<i64>,
+    /// The session pinned to the taskbar.
+    #[serde(default)]
+    pub pinned: Option<String>,
+    /// The week (its Monday, unix seconds) the weekly summary was last made for.
+    #[serde(default)]
+    pub summary_week: Option<i64>,
+    /// When the update check last asked GitHub (unix seconds).
+    #[serde(default)]
+    pub update_checked: Option<i64>,
+    /// The newer version a bubble already told about.
+    #[serde(default)]
+    pub update_announced: Option<String>,
+    /// The GPG agent's process id and when it unlocked the signing key.
+    #[serde(default)]
+    pub gpg_unlocked: Option<(u32, i64)>,
+}
+
+fn path() -> Option<PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    Some(PathBuf::from(base).join("Trayward").join("state.json"))
+}
+
+/// Moves the state over from the app's earlier name (Claude Task Bar), once.
+pub fn migrate_legacy() {
+    if crate::demo::active() {
+        return;
+    }
+    let Some(new) = path() else { return };
+    let Some(base) = std::env::var_os("LOCALAPPDATA") else { return };
+    let old_dir = PathBuf::from(base).join("ClaudeTaskBar");
+    if new.exists() || !old_dir.join("state.json").exists() {
+        return;
+    }
+    if let Some(dir) = new.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::rename(old_dir.join("state.json"), &new).is_ok() {
+        let _ = std::fs::remove_dir(&old_dir);
+    }
+}
+
+pub fn load() -> Saved {
+    if crate::demo::active() {
+        // Made-up usage history; nothing of the real state.
+        let now = crate::win::now_ms() / 1000;
+        return Saved {
+            history: crate::demo::history(now),
+            plan: Some(crate::demo::plan().into()),
+            ..Default::default()
+        };
+    }
+    let Some(path) = path() else { return Saved::default() };
+    let Ok(bytes) = std::fs::read(&path) else { return Saved::default() };
+    match parse(&bytes) {
+        Some((saved, true)) => saved,
+        found => {
+            // Not all of it readable (cut off, or from a newer version): set
+            // aside, not overwritten by the next save, so it can be recovered.
+            // What could be read is used.
+            let _ = std::fs::rename(&path, path.with_extension("bad.json"));
+            found.map(|(saved, _)| saved).unwrap_or_default()
+        }
+    }
+}
+
+/// Reads a state file: whole, or else field by field, so one unreadable part
+/// (a session's numbers) doesn't lose the rest (the history of the weekly
+/// limit). `None` if it isn't JSON at all; the flag says whether all was read.
+fn parse(bytes: &[u8]) -> Option<(Saved, bool)> {
+    if let Ok(saved) = serde_json::from_slice::<Saved>(bytes) {
+        return Some((saved, true));
+    }
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    fn field<T: serde::de::DeserializeOwned + Default>(v: &serde_json::Value, key: &str) -> T {
+        serde_json::from_value(v[key].clone()).unwrap_or_default()
+    }
+    let saved = Saved {
+        usage: field(&v, "usage"),
+        fetched_at: field(&v, "fetched_at"),
+        plan: field(&v, "plan"),
+        history: field(&v, "history"),
+        sessions: field(&v, "sessions"),
+        warned: field(&v, "warned"),
+        snoozed_until: field(&v, "snoozed_until"),
+        pinned: field(&v, "pinned"),
+        summary_week: field(&v, "summary_week"),
+        update_checked: field(&v, "update_checked"),
+        update_announced: field(&v, "update_announced"),
+        gpg_unlocked: field(&v, "gpg_unlocked"),
+    };
+    Some((saved, false))
+}
+
+/// Saves the state on its own thread, so the UI thread never waits for the
+/// disk. Saves that follow each other closely (every hook event asks for one)
+/// become one: the newest state is written a moment after the first request.
+pub struct Writer(std::sync::mpsc::Sender<Request>);
+
+enum Request {
+    Save(Box<Saved>),
+    /// Write what's waiting now and answer when it's on disk.
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+/// How long a save waits for newer ones.
+const SAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Writer {
+    pub fn spawn() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Request>();
+        std::thread::spawn(move || {
+            crate::win::background_thread();
+            while let Ok(first) = rx.recv() {
+                let (mut newest, mut waiting) = match first {
+                    Request::Save(s) => (Some(s), None),
+                    Request::Flush(done) => (None, Some(done)),
+                };
+                let until = std::time::Instant::now() + SAVE_AFTER;
+                while waiting.is_none() {
+                    match rx.recv_timeout(until.saturating_duration_since(std::time::Instant::now())) {
+                        Ok(Request::Save(s)) => newest = Some(s),
+                        Ok(Request::Flush(done)) => waiting = Some(done),
+                        Err(_) => break,
+                    }
+                }
+                if let Some(s) = newest {
+                    save(&s);
+                }
+                if let Some(done) = waiting {
+                    let _ = done.send(());
+                }
+            }
+        });
+        Self(tx)
+    }
+
+    /// Saves `saved` soon.
+    pub fn save(&self, saved: Saved) {
+        let _ = self.0.send(Request::Save(Box::new(saved)));
+    }
+
+    /// Waits until everything asked for is on disk (when the app exits).
+    pub fn flush(&self) {
+        let (done, wait) = std::sync::mpsc::channel();
+        if self.0.send(Request::Flush(done)).is_ok() {
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(3));
+        }
+    }
+}
+
+/// Best effort: losing the cache only means starting empty next time.
+fn save(saved: &Saved) {
+    if crate::demo::active() {
+        return;
+    }
+    let Some(path) = path() else { return };
+    let Ok(bytes) = serde_json::to_vec(saved) else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, &path)).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_what_it_can_read_of_a_damaged_state() {
+        let ok = br#"{"history":[{"at":1,"used":5.0,"resets_at":null}],"warned":[["weekly80",9]]}"#;
+        let (saved, whole) = parse(ok).unwrap();
+        assert!(whole);
+        assert_eq!((saved.history.len(), saved.warned.len()), (1, 1));
+        // A session list it can't read: the history stays.
+        let bad = br#"{"history":[{"at":1,"used":5.0,"resets_at":null}],"sessions":{"list":[{"id":7}]}}"#;
+        let (saved, whole) = parse(bad).unwrap();
+        assert!(!whole);
+        assert_eq!(saved.history.len(), 1);
+        assert_eq!(parse(b"cut off {").map(|(_, w)| w), None);
+    }
+}

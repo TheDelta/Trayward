@@ -1,0 +1,225 @@
+//! Reads the 5-hour and weekly limits from the endpoint Claude Code's `/usage`
+//! command uses, authenticated with Claude Code's saved login.
+//!
+//! The login is only ever *read*. Claude Code renews it while it runs; if the
+//! token has expired we report that instead of renewing it ourselves, so this
+//! app can never interfere with Claude Code's own credentials.
+
+use crate::{http, timefmt, win};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fmt;
+use std::path::{Path, PathBuf};
+
+const API_HOST: &str = "api.anthropic.com";
+const USAGE_PATH: &str = "/api/oauth/usage";
+const PROFILE_PATH: &str = "/api/oauth/profile";
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Limit {
+    /// Percent of the limit used, 0..=100.
+    pub used: f64,
+    /// When the window resets (unix seconds).
+    pub resets_at: Option<i64>,
+}
+
+impl Limit {
+    /// Used percent as of `now`: once the window has reset, nothing is used
+    /// until Claude is used again (which also refreshes our numbers).
+    pub fn used_at(&self, now: i64) -> f64 {
+        match self.resets_at {
+            Some(t) if t <= now => 0.0,
+            _ => self.used.clamp(0.0, 100.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Usage {
+    pub five_hour: Option<Limit>,
+    pub weekly: Option<Limit>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FetchError {
+    /// No Claude Code login on this PC.
+    NoLogin,
+    /// The saved login has expired or was rejected.
+    LoginExpired,
+    /// Too many requests; how long the server asks to wait (seconds), if it said.
+    RateLimited(Option<u32>),
+    Network(String),
+    Server(u32),
+    BadResponse,
+}
+
+impl fmt::Display for FetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoLogin => f.write_str(crate::i18n::t("No Claude Code login found. Run `claude` and sign in.")),
+            Self::LoginExpired => f.write_str(crate::i18n::t("Login expired. Using Claude Code renews it.")),
+            Self::RateLimited(_) => f.write_str(crate::i18n::t("Rate limited, retrying later.")),
+            Self::Network(e) => f.write_str(e),
+            Self::Server(s) => f.write_str(&crate::i18n::f("Usage request failed (HTTP {0}).", &[s])),
+            Self::BadResponse => f.write_str(crate::i18n::t("Unexpected response from the usage API.")),
+        }
+    }
+}
+
+/// Claude Code's config folder: `CLAUDE_CONFIG_DIR`, or `%USERPROFILE%\.claude`.
+pub fn config_dir() -> PathBuf {
+    if let Some(d) = crate::demo::dir() {
+        return d.clone();
+    }
+    if let Some(d) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(d);
+    }
+    let home = std::env::var_os("USERPROFILE").unwrap_or_else(|| ".".into());
+    PathBuf::from(home).join(".claude")
+}
+
+/// Extracts a usable access token from the contents of `.credentials.json`.
+fn access_token(credentials: &str, now_ms: i64) -> Result<String, FetchError> {
+    let root: Value = serde_json::from_str(credentials).map_err(|_| FetchError::NoLogin)?;
+    let oauth = &root["claudeAiOauth"];
+    let token = oauth["accessToken"].as_str().filter(|t| !t.is_empty()).ok_or(FetchError::NoLogin)?;
+    if oauth["expiresAt"].as_i64().is_some_and(|exp| exp <= now_ms) {
+        return Err(FetchError::LoginExpired);
+    }
+    Ok(token.to_string())
+}
+
+/// `GET` an OAuth API path with the login stored in `dir`; returns the body.
+fn api_get(dir: &Path, path: &str) -> Result<Vec<u8>, FetchError> {
+    let creds = std::fs::read_to_string(dir.join(".credentials.json")).map_err(|_| FetchError::NoLogin)?;
+    let token = access_token(&creds, win::now_ms())?;
+    let auth = format!("Bearer {token}");
+    let resp = http::get(
+        API_HOST,
+        path,
+        &[("Authorization", &auth), ("anthropic-beta", "oauth-2025-04-20"), ("Accept", "application/json")],
+    )
+    .map_err(FetchError::Network)?;
+    match resp.status {
+        200 => Ok(resp.body),
+        401 | 403 => Err(FetchError::LoginExpired),
+        429 => Err(FetchError::RateLimited(resp.retry_after)),
+        s => Err(FetchError::Server(s)),
+    }
+}
+
+/// Fetches the current limits for the login stored in `dir`.
+pub fn fetch(dir: &Path) -> Result<Usage, FetchError> {
+    parse_usage(&api_get(dir, USAGE_PATH)?)
+}
+
+/// Fetches the name of the account's plan, e.g. "Pro", "Max 20x" or "Ultra".
+/// The login file has a plan too, but it is only updated when signing in.
+pub fn fetch_plan(dir: &Path) -> Result<String, FetchError> {
+    parse_plan(&api_get(dir, PROFILE_PATH)?).ok_or(FetchError::BadResponse)
+}
+
+fn parse_plan(body: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(body).ok()?;
+    let org = &v["organization"];
+    if let Some(name) = org["plan_display_name"].as_str().map(str::trim).filter(|n| !n.is_empty()) {
+        return Some(name.to_string());
+    }
+    let tier = org["rate_limit_tier"].as_str().unwrap_or_default();
+    let multiplier = ["20x", "5x"].into_iter().find(|m| tier.ends_with(m));
+    let name = match org["organization_type"].as_str()? {
+        "claude_max" => match multiplier {
+            Some(m) => format!("Max {m}"),
+            None => "Max".into(),
+        },
+        "claude_pro" => "Pro".into(),
+        "claude_team" => "Team".into(),
+        "claude_enterprise" => "Enterprise".into(),
+        _ if v["account"]["has_claude_max"] == false && v["account"]["has_claude_pro"] == false => "Free".into(),
+        _ => return None,
+    };
+    Some(name)
+}
+
+fn parse_usage(body: &[u8]) -> Result<Usage, FetchError> {
+    let v: Value = serde_json::from_slice(body).map_err(|_| FetchError::BadResponse)?;
+    if !v.is_object() {
+        return Err(FetchError::BadResponse);
+    }
+    let limit = |key: &str| -> Option<Limit> {
+        let o = v.get(key)?;
+        Some(Limit {
+            used: o.get("utilization")?.as_f64()?,
+            resets_at: o.get("resets_at").and_then(Value::as_str).and_then(timefmt::parse_rfc3339),
+        })
+    };
+    Ok(Usage { five_hour: limit("five_hour"), weekly: limit("seven_day") })
+}
+
+/// German translations of its messages (see `i18n`).
+#[rustfmt::skip]
+pub const DE: &[(&str, &str)] = &[
+    ("No Claude Code login found. Run `claude` and sign in.", "Keine Claude-Code-Anmeldung gefunden. Starte `claude` und melde dich an."),
+    ("Login expired. Using Claude Code renews it.", "Anmeldung abgelaufen. Claude Code zu benutzen erneuert sie."),
+    ("Rate limited, retrying later.", "Zu viele Anfragen, später neuer Versuch."),
+    ("Usage request failed (HTTP {0}).", "Abfrage der Nutzung fehlgeschlagen (HTTP {0})."),
+    ("Unexpected response from the usage API.", "Unerwartete Antwort der Nutzungs-API."),
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_usage_response() {
+        let body = br#"{
+            "five_hour": {"utilization": 17.0, "resets_at": "2026-11-11T14:10:00+00:00"},
+            "seven_day": {"utilization": 42.5, "resets_at": null},
+            "seven_day_opus": null
+        }"#;
+        let u = parse_usage(body).unwrap();
+        assert_eq!(u.five_hour, Some(Limit { used: 17.0, resets_at: Some(1_794_406_200) }));
+        assert_eq!(u.weekly, Some(Limit { used: 42.5, resets_at: None }));
+    }
+
+    #[test]
+    fn parses_plan() {
+        let named = br#"{"organization":{"organization_type":"claude_max","plan_display_name":"Ultra"}}"#;
+        assert_eq!(parse_plan(named).as_deref(), Some("Ultra"));
+        let max = br#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}"#;
+        assert_eq!(parse_plan(max).as_deref(), Some("Max 5x"));
+        let pro = br#"{"organization":{"organization_type":"claude_pro","plan_display_name":" "}}"#;
+        assert_eq!(parse_plan(pro).as_deref(), Some("Pro"));
+        let free =
+            br#"{"account":{"has_claude_max":false,"has_claude_pro":false},"organization":{"organization_type":"x"}}"#;
+        assert_eq!(parse_plan(free).as_deref(), Some("Free"));
+        assert_eq!(parse_plan(b"{}"), None);
+    }
+
+    #[test]
+    fn missing_limits_are_none() {
+        let u = parse_usage(br#"{"five_hour": null}"#).unwrap();
+        assert_eq!(u, Usage::default());
+        assert_eq!(parse_usage(b"[]"), Err(FetchError::BadResponse));
+        assert_eq!(parse_usage(b"nope"), Err(FetchError::BadResponse));
+    }
+
+    #[test]
+    fn reset_window_reads_as_unused() {
+        let l = Limit { used: 80.0, resets_at: Some(1000) };
+        assert_eq!(l.used_at(999), 80.0);
+        assert_eq!(l.used_at(1000), 0.0);
+        assert_eq!(Limit { used: 140.0, resets_at: None }.used_at(0), 100.0);
+    }
+
+    #[test]
+    fn reads_token_and_expiry() {
+        let ok = r#"{"claudeAiOauth":{"accessToken":"abc","expiresAt":2000}}"#;
+        assert_eq!(access_token(ok, 1000), Ok("abc".into()));
+        assert_eq!(access_token(ok, 2000), Err(FetchError::LoginExpired));
+        assert_eq!(access_token(r#"{"claudeAiOauth":{}}"#, 0), Err(FetchError::NoLogin));
+        assert_eq!(access_token("garbage", 0), Err(FetchError::NoLogin));
+        let no_expiry = r#"{"claudeAiOauth":{"accessToken":"abc"}}"#;
+        assert_eq!(access_token(no_expiry, 0), Ok("abc".into()));
+    }
+}

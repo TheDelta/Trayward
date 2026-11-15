@@ -1,0 +1,24 @@
+# LF everywhere, whatever core.autocrlf says; cmd.exe needs CRLF
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.rs      text diff=rust
+*.py      text diff=python
+*.mjs     text
+*.md      text diff=markdown
+*.json    text
+*.toml    text
+*.yaml    text
+*.rc      text
+*.manifest text
+*.sh      text eol=lf
+
+*.png   binary
+*.ico   binary
+*.gif   binary
+*.wav   binary
+*.exe   binary
+
+Cargo.lock -diff linguist-generated
+package-lock.json -diff linguist-generated

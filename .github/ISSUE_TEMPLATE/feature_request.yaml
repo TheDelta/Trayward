@@ -1,0 +1,38 @@
+name: ✨ Feature request
+description: Suggest an idea or an improvement.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Please check the [existing issues](https://github.com/TheDelta/trayward/issues) first.
+        Not sure yet or want to talk it through? Start a [discussion](https://github.com/TheDelta/trayward/discussions) instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve?
+      description: What are you trying to do, and what makes it hard today?
+      placeholder: When several sessions finish at once, I can't tell …
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How could it work? Sketches or screenshots of similar tools are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself (see CONTRIBUTING.md).

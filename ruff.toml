@@ -1,0 +1,39 @@
+# Ruff: lint (`ruff check`) and format (`ruff format`, Black's style) for the Python
+# release scripts. Used by `npm run check`, the pre-commit hook, CI and editors.
+target-version = "py311"
+# 100 columns, as Prettier
+line-length = 100
+extend-exclude = [".venv", "target"]
+
+[format]
+line-ending = "lf"
+
+[lint]
+select = [
+  "F",   # pyflakes: real errors (undefined / unused names)
+  "E9",  # syntax errors
+  "B",   # bugbear: likely bugs
+  "UP",  # pyupgrade, for the Python version above
+  "SIM", # simpler equivalents
+  "DTZ", # time zone aware dates
+  "C90", # complexity, see below
+  "S",   # security (bandit)
+  "I",   # sorted imports
+  "A",   # shadowed builtins
+  "C4",  # comprehensions
+  "PIE", # unnecessary code
+  "RET", # return statements
+  "PERF", # performance anti-patterns
+  "RUF", # Ruff's own checks
+]
+ignore = [
+  # urlopen() on GitHub's API, a fixed https URL
+  "S310",
+]
+
+[lint.per-file-ignores]
+# Tests run the project's own scripts (subprocess) and use made-up keys and tokens
+"scripts/tests/**" = ["S603", "S105", "S106"]
+
+[lint.mccabe]
+max-complexity = 10

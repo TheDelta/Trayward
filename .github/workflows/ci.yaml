@@ -1,0 +1,136 @@
+# Checks on every push to main and every pull request
+# Locally: `npm run check`
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HUSKY: "0" # no Git hooks on the runner
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Lint and checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json # devEngines.runtime
+          cache: npm
+
+      - name: Install the tools (package-lock.json, requirements-dev.txt)
+        run: |
+          npm ci --ignore-scripts
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      # Everything but Rust (the next job, on Windows); with the release scripts' tests
+      - name: npm run check
+        run: npm run check -- --no-rust
+
+      # Known-vulnerable or impostor action commits; only this step gets the token
+      - name: zizmor (online audits)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor .github
+
+  rust:
+    name: Rust (${{ matrix.role }})
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash # Git Bash; PowerShell is the default on Windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: oldest # rust-version in Cargo.toml
+            toolchain: "1.85"
+          - role: newest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust ${{ matrix.toolchain }}
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt,clippy,llvm-tools-preview
+          rustup default "$TOOLCHAIN"
+          rustc --version
+
+      - name: rustfmt
+        if: matrix.role == 'newest'
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Tests
+        if: matrix.role == 'oldest'
+        run: cargo test --locked
+
+      # A prebuilt cargo-llvm-cov, checked against the action's checksums (no build
+      # from source on every run)
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        if: matrix.role == 'newest'
+        with:
+          tool: cargo-llvm-cov@0.9.1
+
+      # The same tests, measured; lcov.info is for SonarQube Cloud (sonar.yaml), whose
+      # scanner runs on Linux: the files as paths relative to the repository
+      - name: Tests (with coverage)
+        if: matrix.role == 'newest'
+        run: |
+          cargo llvm-cov --locked --lcov --output-path coverage/rust/lcov.info
+          cargo llvm-cov report --summary-only
+          python - <<'EOF'
+          import os, pathlib
+          report, root = pathlib.Path("coverage/rust/lcov.info"), os.getcwd()
+          lines = report.read_text(encoding="utf-8").splitlines(keepends=True)
+          fix = lambda l: f"SF:{os.path.relpath(l[3:].strip(), root).replace(os.sep, '/')}\n"
+          report.write_text("".join(fix(l) if l.startswith("SF:") else l for l in lines), encoding="utf-8", newline="\n")
+          EOF
+          grep -m 3 '^SF:' coverage/rust/lcov.info
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && matrix.role == 'newest' }}
+        with:
+          name: coverage-rust
+          path: coverage/rust/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The exe of this commit, to try a change without building it
+      - name: Build
+        if: matrix.role == 'newest'
+        run: cargo build --release --locked
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.role == 'newest'
+        with:
+          name: trayward-${{ github.sha }}
+          path: target/release/trayward.exe
+          retention-days: 14

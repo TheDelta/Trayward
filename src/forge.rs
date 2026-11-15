@@ -1,0 +1,657 @@
+//! Merge requests, pull requests and pipelines from GitLab and GitHub: the
+//! one on each session's branch, and the user's own open ones in the
+//! sessions' projects.
+//!
+//! Through the hosts' own command-line tools, `glab` and `gh`, with their
+//! stored logins: Trayward never handles a token. One GraphQL request per host
+//! asks for everything at once. Off unless switched on (Settings → Providers),
+//! since it contacts GitLab and GitHub.
+//!
+//! A session's repository and branch come from its folder's `.git`: the
+//! `origin` remote names the host and project, `HEAD` the branch.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
+
+/// How often everything is asked for again.
+const EVERY: Duration = Duration::from_secs(60);
+/// A tool that takes longer is stopped.
+const TIMEOUT: Duration = Duration::from_secs(30);
+/// How many of the user's own open ones are asked for per host, before only
+/// those in the sessions' projects are kept.
+const MINE: usize = 50;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Forge {
+    GitLab,
+    GitHub,
+}
+
+/// A project on a host, e.g. GitLab `gitlab.example.com` `group/project`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Repo {
+    pub forge: Forge,
+    pub host: String,
+    pub path: String,
+}
+
+/// A pipeline's (or the checks') state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Checks {
+    Running,
+    Passed,
+    Failed,
+    Canceled,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Open,
+    Merged,
+    Closed,
+}
+
+/// A merge request (GitLab) or pull request (GitHub).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Change {
+    pub forge: Forge,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// The project, e.g. `group/project`.
+    pub project: String,
+    pub state: State,
+    pub draft: bool,
+    pub checks: Option<Checks>,
+    /// Last updated (unix seconds; 0 if unknown).
+    pub updated: i64,
+}
+
+impl Change {
+    /// `!37` on GitLab, `#37` on GitHub.
+    pub fn reference(&self) -> String {
+        match self.forge {
+            Forge::GitLab => format!("!{}", self.number),
+            Forge::GitHub => format!("#{}", self.number),
+        }
+    }
+}
+
+/// What a session's branch has: its newest merge or pull request, and the
+/// branch's latest pipeline when there's none (GitLab).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Branch {
+    pub name: String,
+    pub change: Option<Change>,
+    pub checks: Option<Checks>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Snapshot {
+    /// Per session folder.
+    pub sessions: HashMap<String, Branch>,
+    /// The user's own open merge and pull requests in the sessions' projects,
+    /// newest first.
+    pub mine: Vec<Change>,
+}
+
+// ---------- the repository of a folder ----------
+
+/// The repository and branch of a folder (or a folder inside a repository).
+pub fn repo_of(folder: &str) -> Option<(Repo, String)> {
+    let (git_dir, common) = git_dirs(Path::new(folder))?;
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let branch = head.trim().strip_prefix("ref: refs/heads/")?.to_string();
+    let config = std::fs::read_to_string(common.join("config")).ok()?;
+    let url = origin_url(&config)?;
+    Some((parse_remote(&url)?, branch))
+}
+
+/// The `.git` folder of a working tree and its common folder (they differ in
+/// a `git worktree`, whose `.git` is a file pointing to its own folder).
+fn git_dirs(start: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        let dot = d.join(".git");
+        if dot.is_dir() {
+            return Some((dot.clone(), dot));
+        }
+        if dot.is_file() {
+            let text = std::fs::read_to_string(&dot).ok()?;
+            let git_dir = d.join(text.trim().strip_prefix("gitdir:")?.trim());
+            let common = std::fs::read_to_string(git_dir.join("commondir"))
+                .map_or_else(|_| git_dir.clone(), |c| git_dir.join(c.trim()));
+            return Some((git_dir, common));
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// `[remote "origin"] url = …` from a git config.
+fn origin_url(config: &str) -> Option<String> {
+    let mut in_origin = false;
+    for line in config.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_origin = line == "[remote \"origin\"]";
+        } else if in_origin {
+            if let Some((key, value)) = line.split_once('=') {
+                if key.trim() == "url" {
+                    return Some(value.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The host and project of a remote URL: `git@host:group/p.git`,
+/// `ssh://git@host:2222/group/p.git`, `https://host/group/p`.
+fn parse_remote(url: &str) -> Option<Repo> {
+    let (host, path) = if let Some(rest) = url.split_once("://").map(|(_, r)| r) {
+        let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
+        let (host, path) = rest.split_once('/')?;
+        (host.split(':').next()?, path)
+    } else {
+        // scp-like: user@host:path
+        let rest = url.rsplit_once('@').map_or(url, |(_, r)| r);
+        rest.split_once(':')?
+    };
+    let host = host.to_ascii_lowercase();
+    let path = path.trim_end_matches('/').trim_end_matches(".git").trim_matches('/').to_string();
+    if host.is_empty() || !path.contains('/') {
+        return None;
+    }
+    let forge = if host == "github.com" { Forge::GitHub } else { Forge::GitLab };
+    Some(Repo { forge, host, path })
+}
+
+// ---------- asking the hosts ----------
+
+/// A GraphQL string literal.
+fn quoted(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_default()
+}
+
+const GITLAB_MR: &str = "iid title webUrl state draft updatedAt project { fullPath } headPipeline { status }";
+const GITHUB_PR: &str = "number title url state isDraft updatedAt repository { nameWithOwner } \
+     commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }";
+
+/// One query for a host: each branch (as `b0`, `b1`, …) and the user's own.
+fn query(forge: Forge, branches: &[(String, String)]) -> String {
+    let mut q = String::from("query {");
+    for (i, (path, branch)) in branches.iter().enumerate() {
+        match forge {
+            Forge::GitLab => {
+                q += &format!(
+                    " b{i}: project(fullPath: {}) {{ mergeRequests(sourceBranches: [{}], first: 1, sort: UPDATED_DESC) \
+                 {{ nodes {{ {GITLAB_MR} }} }} pipelines(ref: {}, first: 1) {{ nodes {{ status }} }} }}",
+                    quoted(path),
+                    quoted(branch),
+                    quoted(branch)
+                )
+            }
+            Forge::GitHub => {
+                let (owner, name) = path.split_once('/').unwrap_or((path, ""));
+                q += &format!(
+                    " b{i}: repository(owner: {}, name: {}) {{ pullRequests(headRefName: {}, first: 1, \
+                     orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ {GITHUB_PR} }} }} }}",
+                    quoted(owner),
+                    quoted(name),
+                    quoted(branch)
+                );
+            }
+        }
+    }
+    q += &match forge {
+        Forge::GitLab => format!(
+            " mine: currentUser {{ authoredMergeRequests(state: opened, first: {MINE}, sort: UPDATED_DESC) \
+             {{ nodes {{ {GITLAB_MR} }} }} }} }}"
+        ),
+        Forge::GitHub => format!(
+            " mine: viewer {{ pullRequests(states: OPEN, first: {MINE}, \
+             orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ nodes {{ {GITHUB_PR} }} }} }} }}"
+        ),
+    };
+    q
+}
+
+fn checks_of(status: &str) -> Option<Checks> {
+    match status.to_ascii_uppercase().as_str() {
+        "RUNNING" | "PENDING" | "CREATED" | "PREPARING" | "WAITING_FOR_RESOURCE" | "SCHEDULED" | "EXPECTED" => {
+            Some(Checks::Running)
+        }
+        "SUCCESS" => Some(Checks::Passed),
+        "FAILED" | "FAILURE" | "ERROR" => Some(Checks::Failed),
+        "CANCELED" | "CANCELING" => Some(Checks::Canceled),
+        _ => None, // skipped, manual: nothing to say
+    }
+}
+
+fn change_of(forge: Forge, v: &Value) -> Option<Change> {
+    let (number, url, project, draft, checks) = match forge {
+        Forge::GitLab => (
+            v["iid"].as_str()?.parse().ok()?,
+            v["webUrl"].as_str()?,
+            v["project"]["fullPath"].as_str().unwrap_or_default(),
+            v["draft"].as_bool().unwrap_or(false),
+            v["headPipeline"]["status"].as_str().and_then(checks_of),
+        ),
+        Forge::GitHub => (
+            v["number"].as_u64()?,
+            v["url"].as_str()?,
+            v["repository"]["nameWithOwner"].as_str().unwrap_or_default(),
+            v["isDraft"].as_bool().unwrap_or(false),
+            v["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str().and_then(checks_of),
+        ),
+    };
+    let state = match v["state"].as_str()?.to_ascii_lowercase().as_str() {
+        "opened" | "open" => State::Open,
+        "merged" => State::Merged,
+        _ => State::Closed,
+    };
+    Some(Change {
+        forge,
+        number,
+        title: v["title"].as_str().unwrap_or_default().to_string(),
+        url: url.to_string(),
+        project: project.to_string(),
+        state,
+        draft,
+        checks,
+        updated: v["updatedAt"].as_str().and_then(crate::timefmt::parse_rfc3339).unwrap_or(0),
+    })
+}
+
+/// A branch's newest request and checks, if the host knows the project.
+type BranchState = Option<(Option<Change>, Option<Checks>)>;
+
+/// A host's answer: each branch's state (in the order asked) and the user's own.
+fn parse(forge: Forge, answer: &Value, asked: usize) -> (Vec<BranchState>, Vec<Change>) {
+    let data = &answer["data"];
+    let list = |v: &Value| v["nodes"].as_array().cloned().unwrap_or_default();
+    let branches = (0..asked)
+        .map(|i| {
+            let b = &data[format!("b{i}")];
+            if b.is_null() {
+                return None;
+            }
+            let (changes, pipeline) = match forge {
+                Forge::GitLab => {
+                    (list(&b["mergeRequests"]), b["pipelines"]["nodes"][0]["status"].as_str().and_then(checks_of))
+                }
+                Forge::GitHub => (list(&b["pullRequests"]), None),
+            };
+            let change = changes.first().and_then(|c| change_of(forge, c));
+            let checks = change.as_ref().and_then(|c| c.checks).or(pipeline);
+            Some((change, checks))
+        })
+        .collect();
+    let mine_key = match forge {
+        Forge::GitLab => "authoredMergeRequests",
+        Forge::GitHub => "pullRequests",
+    };
+    let mine = list(&data["mine"][mine_key]).iter().filter_map(|c| change_of(forge, c)).collect();
+    (branches, mine)
+}
+
+/// Runs `glab` or `gh`; its output, or why it failed.
+pub(crate) fn run(program: &str, args: &[&str]) -> Result<String, String> {
+    let exe = crate::win::find_program(program).ok_or_else(|| format!("{program}: program not found"))?;
+    let out = crate::win::run(exe.as_os_str(), args, TIMEOUT)?;
+    if !out.complete {
+        return Err(format!("{program}: no answer within {} s", TIMEOUT.as_secs()));
+    }
+    // GraphQL errors still come with a JSON answer; use what's there.
+    let text = out.stdout_text();
+    if text.trim().is_empty() {
+        return Err(out.stderr_text().trim().to_string());
+    }
+    Ok(text)
+}
+
+/// Which GitLab hosts `glab` has a login for, as far as asked. Only those
+/// are asked for merge requests: a repository on any other host (Bitbucket,
+/// Codeberg, a self-hosted git) isn't GitLab's business, and `glab` would
+/// send it the query all the same. Each host is checked on its own
+/// (`glab auth status --hostname`): a host without a login can take glab
+/// half a minute to give up on, so it's checked again only now and then.
+#[derive(Default)]
+struct Logins {
+    /// Host → whether it has a login, and when that was found out.
+    known: HashMap<String, (bool, Instant)>,
+}
+
+/// How long a host without a (working) login isn't checked again.
+const RECHECK_LOGIN: Duration = Duration::from_secs(30 * 60);
+/// A login check that takes longer counts as no login.
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(45);
+
+impl Logins {
+    fn has(&mut self, host: &str) -> bool {
+        if let Some((ok, at)) = self.known.get(host) {
+            if *ok || at.elapsed() < RECHECK_LOGIN {
+                return *ok;
+            }
+        }
+        let ok = crate::win::find_program("glab").is_some_and(|glab| {
+            let out = crate::win::run(glab.as_os_str(), &["auth", "status", "--hostname", host], LOGIN_TIMEOUT);
+            out.is_ok_and(|o| o.complete && o.success)
+        });
+        self.known.insert(host.to_string(), (ok, Instant::now()));
+        ok
+    }
+}
+
+/// Asks every host the sessions' folders are on (of the GitLab hosts, only
+/// those `glab` has a login for) for the sessions' branches and the user's own
+/// requests in the sessions' projects.
+fn fetch(folders: &[String], logins: &mut Logins) -> Snapshot {
+    // Folder → repository and branch, grouped by host.
+    // (forge, host) → (folder, project, branch)
+    type Sessions = Vec<(String, String, String)>;
+    let mut hosts: HashMap<(Forge, String), Sessions> = HashMap::new();
+    for folder in folders {
+        if let Some((repo, branch)) = repo_of(folder) {
+            hosts.entry((repo.forge, repo.host)).or_default().push((folder.clone(), repo.path, branch));
+        }
+    }
+    let mut snap = Snapshot::default();
+    for ((forge, host), list) in hosts {
+        if forge == Forge::GitLab && !logins.has(&host) {
+            continue;
+        }
+        // One question per project and branch, however many sessions share it.
+        let mut asked: Vec<(String, String)> = Vec::new();
+        for (_, path, branch) in &list {
+            if !asked.iter().any(|(p, b)| p == path && b == branch) {
+                asked.push((path.clone(), branch.clone()));
+            }
+        }
+        let q = format!("query={}", query(forge, &asked));
+        let answer = match forge {
+            Forge::GitLab => run("glab", &["api", "graphql", "--hostname", &host, "-f", &q]),
+            Forge::GitHub => run("gh", &["api", "graphql", "--hostname", &host, "-f", &q]),
+        };
+        let Ok(answer) = answer.and_then(|a| serde_json::from_str::<Value>(&a).map_err(|e| e.to_string())) else {
+            continue;
+        };
+        let (branches, mine) = parse(forge, &answer, asked.len());
+        for (folder, path, branch) in &list {
+            let i = asked.iter().position(|(p, b)| p == path && b == branch).unwrap_or(0);
+            if let Some(Some((change, checks))) = branches.get(i) {
+                snap.sessions
+                    .insert(folder.clone(), Branch { name: branch.clone(), change: change.clone(), checks: *checks });
+            }
+        }
+        // Only the user's requests in a project a session works in.
+        let projects: Vec<&str> = list.iter().map(|(_, path, _)| path.as_str()).collect();
+        snap.mine.extend(mine.into_iter().filter(|c| in_projects(c, &projects)));
+    }
+    sort_mine(&mut snap.mine);
+    snap
+}
+
+/// Whether a request is in one of the projects (paths compared ignoring case:
+/// a remote URL may spell the project differently from the host).
+pub fn in_projects(c: &Change, projects: &[&str]) -> bool {
+    projects.iter().any(|p| p.eq_ignore_ascii_case(&c.project))
+}
+
+/// The user's own requests across hosts: failed pipelines first (they need
+/// the user), then running ones, then the most recently updated.
+pub fn sort_mine(list: &mut [Change]) {
+    let urgency = |c: &Change| match c.checks {
+        Some(Checks::Failed) => 0,
+        Some(Checks::Running) => 1,
+        _ => 2,
+    };
+    list.sort_by_key(|c| (urgency(c), std::cmp::Reverse(c.updated)));
+}
+
+/// Asks the hosts every minute (and right away when `poke` is set) while `on`,
+/// for the folders in `folders`; posts a [`Snapshot`] to `ctl` as `msg` when
+/// something changed.
+pub fn spawn(
+    ctl: crate::win::SendHwnd,
+    msg: u32,
+    on: Arc<AtomicBool>,
+    poke: Arc<AtomicBool>,
+    folders: Arc<Mutex<Vec<String>>>,
+) {
+    std::thread::spawn(move || {
+        crate::win::background_thread();
+        // glab's logins, asked for once it's switched on (not at every start).
+        let mut logins = Logins::default();
+        let mut last: Option<Snapshot> = None;
+        let mut asked_at: Option<Instant> = None;
+        loop {
+            let due = asked_at.is_none_or(|t| t.elapsed() >= EVERY) || poke.swap(false, Ordering::Relaxed);
+            if on.load(Ordering::Relaxed) && due {
+                let list = folders.lock().map(|f| f.clone()).unwrap_or_default();
+                let snap = if crate::demo::active() { crate::demo::forge(&list) } else { fetch(&list, &mut logins) };
+                asked_at = Some(Instant::now());
+                if last.as_ref() != Some(&snap) {
+                    last = Some(snap.clone());
+                    crate::win::post_boxed(ctl, msg, snap);
+                }
+            } else if !on.load(Ordering::Relaxed) {
+                asked_at = None;
+                if last.take().is_some() {
+                    crate::win::post_boxed(ctl, msg, Snapshot::default());
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+/// What changed for the user between two snapshots: a pipeline finished, or a
+/// merge or pull request was merged. Each change once, by its URL.
+pub fn news(before: &Snapshot, now: &Snapshot) -> Vec<(Change, News)> {
+    let all = |s: &Snapshot| -> HashMap<String, Change> {
+        s.sessions
+            .values()
+            .filter_map(|b| b.change.clone())
+            .chain(s.mine.iter().cloned())
+            .map(|c| (c.url.clone(), c))
+            .collect()
+    };
+    let (old, new) = (all(before), all(now));
+    let mut out: Vec<(Change, News)> = Vec::new();
+    for (url, c) in new {
+        let Some(o) = old.get(&url) else { continue };
+        let what = if o.state == State::Open && c.state == State::Merged {
+            Some(News::Merged)
+        } else if o.checks == Some(Checks::Running) {
+            match c.checks {
+                Some(Checks::Passed) => Some(News::Passed),
+                Some(Checks::Failed) => Some(News::Failed),
+                Some(Checks::Canceled) => Some(News::Canceled),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(w) = what {
+            out.push((c, w));
+        }
+    }
+    // Failures first: they need the user.
+    out.sort_by_key(|(_, w)| *w != News::Failed);
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum News {
+    Passed,
+    Failed,
+    Canceled,
+    Merged,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reads_remotes() {
+        let r = parse_remote("git@gitlab.example.com:group/sub/project.git").unwrap();
+        assert_eq!(
+            (r.forge, r.host.as_str(), r.path.as_str()),
+            (Forge::GitLab, "gitlab.example.com", "group/sub/project")
+        );
+        let r = parse_remote("https://github.com/owner/repo.git").unwrap();
+        assert_eq!((r.forge, r.path.as_str()), (Forge::GitHub, "owner/repo"));
+        let r = parse_remote("ssh://git@gitlab.example.com:2222/group/project").unwrap();
+        assert_eq!((r.host.as_str(), r.path.as_str()), ("gitlab.example.com", "group/project"));
+        let r = parse_remote("https://user@GitLab.Example.com/group/project/").unwrap();
+        assert_eq!(r.host, "gitlab.example.com");
+        assert!(parse_remote("/local/path").is_none());
+        let config =
+            "[core]\n\tbare = false\n[remote \"upstream\"]\n\turl = x\n[remote \"origin\"]\n\turl = git@h:g/p.git\n";
+        assert_eq!(origin_url(config).as_deref(), Some("git@h:g/p.git"));
+    }
+
+    #[test]
+    fn finds_the_branch_also_in_a_worktree() {
+        let base = std::env::temp_dir().join(format!("trayward-forge-test-{}", std::process::id()));
+        let main = base.join("repo");
+        let git = main.join(".git");
+        std::fs::create_dir_all(git.join("worktrees").join("wt")).unwrap();
+        std::fs::write(git.join("config"), "[remote \"origin\"]\n\turl = git@gitlab.example.com:g/p.git\n").unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(main.join("src")).unwrap();
+        let (repo, branch) = repo_of(&main.join("src").display().to_string()).unwrap();
+        assert_eq!((repo.path.as_str(), branch.as_str()), ("g/p", "main"));
+        // A worktree: `.git` is a file; its HEAD is its own, the config shared.
+        let wt = base.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let wt_git = git.join("worktrees").join("wt");
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", wt_git.display())).unwrap();
+        std::fs::write(wt_git.join("HEAD"), "ref: refs/heads/fix/api-base-url\n").unwrap();
+        std::fs::write(wt_git.join("commondir"), "../..\n").unwrap();
+        let (repo, branch) = repo_of(&wt.display().to_string()).unwrap();
+        assert_eq!((repo.path.as_str(), branch.as_str()), ("g/p", "fix/api-base-url"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn asks_once_per_host() {
+        let q = query(Forge::GitLab, &[("g/p".into(), "main".into()), ("g/q".into(), "fix \"x\"".into())]);
+        assert!(q.contains(r#"b0: project(fullPath: "g/p")"#) && q.contains(r#"sourceBranches: ["fix \"x\""]"#));
+        assert!(q.contains("mine: currentUser"));
+        let q = query(Forge::GitHub, &[("o/r".into(), "feat".into())]);
+        assert!(q.contains(r#"repository(owner: "o", name: "r")"#) && q.contains("mine: viewer"));
+    }
+
+    #[test]
+    fn reads_the_answers() {
+        let gitlab = json!({"data": {
+            "b0": {"mergeRequests": {"nodes": [{"iid": "37", "title": "Fix login", "webUrl": "https://h/g/p/-/merge_requests/37",
+                    "state": "opened", "draft": false, "project": {"fullPath": "g/p"}, "headPipeline": {"status": "RUNNING"}}]},
+                   "pipelines": {"nodes": [{"status": "SUCCESS"}]}},
+            "b1": {"mergeRequests": {"nodes": []}, "pipelines": {"nodes": [{"status": "FAILED"}]}},
+            "b2": null,
+            "mine": {"authoredMergeRequests": {"nodes": [{"iid": "5", "title": "Docs", "webUrl": "https://h/g/q/-/merge_requests/5",
+                    "state": "opened", "draft": true, "project": {"fullPath": "g/q"}, "headPipeline": null}]}}
+        }});
+        let (branches, mine) = parse(Forge::GitLab, &gitlab, 3);
+        let (change, checks) = branches[0].clone().unwrap();
+        let change = change.unwrap();
+        assert_eq!(
+            (change.reference(), change.checks, checks),
+            ("!37".into(), Some(Checks::Running), Some(Checks::Running))
+        );
+        // No merge request: the branch's pipeline.
+        assert_eq!(branches[1], Some((None, Some(Checks::Failed))));
+        assert_eq!(branches[2], None);
+        assert!(mine[0].draft && mine[0].checks.is_none() && mine[0].project == "g/q");
+
+        let github = json!({"data": {
+            "b0": {"pullRequests": {"nodes": [{"number": 12, "title": "Feat", "url": "https://github.com/o/r/pull/12", "state": "MERGED",
+                   "isDraft": false, "repository": {"nameWithOwner": "o/r"},
+                   "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}}}]}}]}},
+            "mine": {"pullRequests": {"nodes": []}}
+        }});
+        let (branches, mine) = parse(Forge::GitHub, &github, 1);
+        let change = branches[0].clone().unwrap().0.unwrap();
+        assert_eq!(
+            (change.reference(), change.state, change.checks),
+            ("#12".into(), State::Merged, Some(Checks::Passed))
+        );
+        assert!(mine.is_empty());
+    }
+
+    #[test]
+    fn keeps_only_the_sessions_projects() {
+        let c = |project: &str| Change {
+            forge: Forge::GitLab,
+            number: 1,
+            title: String::new(),
+            url: String::new(),
+            project: project.into(),
+            state: State::Open,
+            draft: false,
+            checks: None,
+            updated: 0,
+        };
+        let projects = ["Group/Shop", "group/api"];
+        assert!(in_projects(&c("group/shop"), &projects));
+        assert!(in_projects(&c("group/api"), &projects));
+        assert!(!in_projects(&c("group/api-docs"), &projects));
+        assert!(!in_projects(&c("other/thing"), &projects));
+    }
+
+    #[test]
+    fn lists_what_needs_the_user_first() {
+        let c = |number, checks, updated| Change {
+            forge: Forge::GitHub,
+            number,
+            title: String::new(),
+            url: String::new(),
+            project: String::new(),
+            state: State::Open,
+            draft: false,
+            checks,
+            updated,
+        };
+        let mut list = vec![
+            c(1, None, 50),
+            c(2, Some(Checks::Passed), 90),
+            c(3, Some(Checks::Failed), 10),
+            c(4, Some(Checks::Running), 5),
+        ];
+        sort_mine(&mut list);
+        assert_eq!(list.iter().map(|c| c.number).collect::<Vec<_>>(), [3, 4, 2, 1]);
+    }
+
+    #[test]
+    fn tells_what_happened() {
+        let mr = |checks, state| Change {
+            forge: Forge::GitLab,
+            number: 1,
+            title: "T".into(),
+            url: "u".into(),
+            project: "g/p".into(),
+            state,
+            draft: false,
+            checks,
+            updated: 0,
+        };
+        let snap = |c: Change| Snapshot { sessions: HashMap::new(), mine: vec![c] };
+        let running = snap(mr(Some(Checks::Running), State::Open));
+        assert_eq!(news(&running, &snap(mr(Some(Checks::Failed), State::Open)))[0].1, News::Failed);
+        assert_eq!(news(&running, &snap(mr(Some(Checks::Passed), State::Open)))[0].1, News::Passed);
+        assert_eq!(news(&snap(mr(None, State::Open)), &snap(mr(None, State::Merged)))[0].1, News::Merged);
+        // Nothing new, or seen for the first time: nothing to say.
+        assert!(news(&running, &running).is_empty());
+        assert!(news(&Snapshot::default(), &running).is_empty());
+    }
+}
