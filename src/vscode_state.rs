@@ -163,4 +163,23 @@ mod tests {
         assert!(archived_in(b"{}").is_empty());
         assert!(archived_in(b"garbage").is_empty());
     }
+
+    /// Windows' own SQLite reads a value (from a database in memory: nothing of VS Code's).
+    #[test]
+    fn reads_with_the_system_sqlite() {
+        let sqlite = Sqlite::load().unwrap();
+        let memory = Path::new(":memory:");
+        let json = sqlite.query_one(memory, r#"SELECT '{"hiddenSessionIds":["a1","b2"]}'"#).unwrap();
+        assert_eq!(archived_in(&json).len(), 2);
+        assert_eq!(sqlite.query_one(memory, "SELECT x'0102'"), Some(vec![1, 2]));
+        // An empty value, no row, a statement that doesn't compile: nothing.
+        assert_eq!(sqlite.query_one(memory, "SELECT ''"), None);
+        assert_eq!(sqlite.query_one(memory, "SELECT 1 WHERE 0"), None);
+        assert_eq!(sqlite.query_one(memory, "SELECT value FROM ItemTable"), None);
+        assert_eq!(sqlite.query_one(memory, "SELECT 1\0"), None);
+        // A database that isn't there isn't made (read only).
+        let missing = std::env::temp_dir().join(format!("trayward-no-such-{}.vscdb", std::process::id()));
+        assert_eq!(sqlite.query_one(&missing, "SELECT 1"), None);
+        assert!(!missing.exists());
+    }
 }

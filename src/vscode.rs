@@ -609,4 +609,134 @@ mod tests {
         assert!(!valid_session_id(""));
         assert!(!valid_session_id("abc&prompt=rm"));
     }
+
+    /// A folder of its own in the temp folder, removed when dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir = std::env::temp_dir().join(format!("trayward-vscode-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A pid no process has (Windows' pids are multiples of 4).
+    const NO_PROCESS: u32 = u32::MAX - 2;
+
+    #[test]
+    fn reads_the_lock_files() {
+        let config = TempDir::new("locks");
+        let ide = config.0.join("ide");
+        std::fs::create_dir_all(&ide).unwrap();
+        let me = std::process::id();
+        let write = |name: &str, text: String| std::fs::write(ide.join(name), text).unwrap();
+        write("1.lock", format!(r#"{{"pid":{me},"workspaceFolders":["c:\\dev\\app"],"ideName":"VS Code"}}"#));
+        write("2.LOCK", format!(r#"{{"pid":{NO_PROCESS},"workspaceFolders":["c:\\dev\\gone"]}}"#));
+        // Without folders, broken, or not a lock file: as far as it can be read.
+        write("3.lock", format!(r#"{{"pid":{me}}}"#));
+        write("4.lock", "{not json".into());
+        write("5.json", format!(r#"{{"pid":{me},"workspaceFolders":["c:\\x"]}}"#));
+        let pids = |locks: &[IdeLock]| {
+            let mut pids: Vec<u32> = locks.iter().map(|l| l.pid).collect();
+            pids.sort_unstable();
+            pids
+        };
+        // Every lock (WSL's pids can't be checked), or those of processes that run.
+        assert_eq!(pids(&read_locks(&config.0, false)), [me, me, NO_PROCESS]);
+        let alive = read_locks(&config.0, true);
+        assert_eq!(pids(&alive), [me, me]);
+        assert!(alive.iter().any(|l| l.workspace_folders.is_empty()));
+        // A lock names the folder: its window's folder, from the lock.
+        assert_eq!(windows_folder(&alive, r"c:\dev\app\src", None).as_deref(), Some(r"c:\dev\app"));
+        // No lock folder at all.
+        assert!(read_locks(&config.0.join("nowhere"), false).is_empty());
+    }
+
+    #[test]
+    fn names_a_window_after_its_title_setting() {
+        let dir = TempDir::new("names");
+        let folder = dir.0.join("my-app");
+        std::fs::create_dir_all(folder.join(".vscode")).unwrap();
+        // No setting: the folder's name, or the start of the user's template.
+        assert_eq!(window_name(&folder, None), "my-app");
+        assert_eq!(window_name(&folder, Some("🧩 ${rootName}${separator}${activeEditorShort}")), "🧩 my-app");
+        assert_eq!(window_name(&folder, Some("${activeEditorShort}")), "my-app");
+        // The workspace's own setting wins.
+        std::fs::write(
+            folder.join(r".vscode\settings.json"),
+            r#"{ "window.title": "🚀 Shop | ${activeEditorShort}", }"#,
+        )
+        .unwrap();
+        assert_eq!(window_name(&folder, Some("${rootName}")), "🚀 Shop");
+        // A path without a folder's name.
+        assert_eq!(window_name(&folder.join(".."), None), "");
+    }
+
+    #[test]
+    fn reads_the_url_scheme_of_an_editor() {
+        let dir = TempDir::new("product");
+        let exe = dir.0.join("Code.exe");
+        // None: VS Code's own.
+        assert_eq!(url_protocol(&exe), None);
+        assert_eq!(url_scheme(&exe), "vscode");
+        // Newer builds keep it in a folder per version.
+        let versioned = dir.0.join(r"1a2b3c\resources\app");
+        std::fs::create_dir_all(&versioned).unwrap();
+        std::fs::write(versioned.join("product.json"), r#"{"nameShort":"Code","urlProtocol":"vscode-insiders"}"#)
+            .unwrap();
+        assert_eq!(url_scheme(&exe), "vscode-insiders");
+        let direct = dir.0.join(r"resources\app");
+        std::fs::create_dir_all(&direct).unwrap();
+        std::fs::write(direct.join("product.json"), r#"{"urlProtocol":"cursor"}"#).unwrap();
+        assert_eq!(url_scheme(&exe), "cursor");
+        // This test isn't VS Code; a process that isn't there neither.
+        assert!(vscode_exe(std::process::id()).is_err());
+        assert!(vscode_exe(NO_PROCESS).is_err());
+    }
+
+    #[test]
+    fn finds_the_main_process_of_vs_code() {
+        let entry = |parent, exe: &str| win::ProcEntry { parent, exe: exe.into() };
+        let table: std::collections::HashMap<u32, win::ProcEntry> = [
+            (1, entry(0, "explorer.exe")),
+            (7, entry(1, "Code.exe")),
+            (8, entry(7, "Code.exe")),
+            (9, entry(8, "code.EXE")),
+            (20, entry(1, "Code - Insiders.exe")),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(main_process(&table, "Code.exe"), Some(7));
+        assert_eq!(main_process(&table, "Code - Insiders.exe"), Some(20));
+        assert_eq!(main_process(&table, "Cursor.exe"), None);
+        // A parent that's gone: it's the main one.
+        let orphan = [(9, entry(5, "Code.exe"))].into_iter().collect();
+        assert_eq!(main_process(&orphan, "Code.exe"), Some(9));
+    }
+
+    #[test]
+    fn switches_only_to_a_session_id() {
+        let target = Target { session_id: "x&y".into(), cwd: r"c:\dev".into(), ide_pid: None, distro: None };
+        assert!(switch_to(Path::new("nowhere"), &target).unwrap_err().contains("session id"));
+        // The window in front belongs to some process (none in a session without a desktop).
+        let _ = foreground_pid();
+        // A VS Code that runs is found by its processes (only looked up).
+        assert!(running_exe().is_none_or(|exe| exe.is_absolute()));
+    }
+
+    #[test]
+    fn says_why_no_window_was_found() {
+        crate::i18n::set(crate::i18n::Choice::English);
+        let none = find_folder(&[], r"c:\dev", false).unwrap_err();
+        assert!(none.contains("Was the window closed?"), "{none}");
+        assert_eq!(workspace_folder(&[], r"c:\dev"), None);
+    }
 }

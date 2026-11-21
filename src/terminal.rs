@@ -618,6 +618,49 @@ mod tests {
         remember(1, HWND(std::ptr::dangling_mut()), 5);
         let found = FOUND.lock().unwrap().iter().filter(|(p, _, _)| *p == 1).map(|(_, _, n)| *n).collect::<Vec<_>>();
         assert_eq!(found, [5]);
+        // A few dozen at most: the oldest goes first.
+        for pid in 100..200 {
+            remember(pid, HWND(std::ptr::dangling_mut()), 1);
+        }
+        let found = FOUND.lock().unwrap().clone();
+        assert_eq!(found.len(), 64);
+        assert!(found.iter().all(|(p, _, _)| *p >= 136), "{found:?}");
+        // One never found: not looked for in VS Code's windows.
+        assert_eq!(from_memory(NO_PROCESS, 7), None);
+        // One found in a window that VS Code (here: no process) doesn't have.
+        assert_eq!(from_memory(NO_PROCESS, 150), None);
+    }
+
+    /// A pid no process has (Windows' pids are multiples of 4).
+    const NO_PROCESS: u32 = u32::MAX - 2;
+
+    /// Ctrl+C and Ctrl+Break are for the programs in the console; closing it isn't.
+    #[test]
+    fn leaves_ctrl_c_to_the_console() {
+        use windows::Win32::System::Console::CTRL_CLOSE_EVENT;
+        // SAFETY: the handler only compares its argument.
+        unsafe {
+            assert_eq!(console_event(CTRL_C_EVENT), TRUE);
+            assert_eq!(console_event(CTRL_BREAK_EVENT), TRUE);
+            assert_eq!(console_event(CTRL_CLOSE_EVENT), FALSE);
+        }
+    }
+
+    /// The helper without a process to look at doesn't attach to anything.
+    #[test]
+    fn the_helper_needs_a_process() {
+        assert_eq!(helper(&[]), 2);
+        assert_eq!(helper(&["not a pid".into(), "0".into()]), 2);
+    }
+
+    /// Windows that aren't there, and VS Code processes that aren't either: nothing.
+    #[test]
+    fn finds_nothing_where_there_is_nothing() {
+        assert_eq!(window_of(0), None);
+        assert_eq!(class_name(HWND::default()), "");
+        assert_eq!(folder_window(NO_PROCESS, None), None);
+        assert_eq!(folder_window(NO_PROCESS, Some("my-app")), None);
+        assert_eq!(find_in_vscode(NO_PROCESS, Some("my-app"), "Trayward 0").ok(), Some(None));
     }
 
     #[test]

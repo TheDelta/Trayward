@@ -443,7 +443,115 @@ mod tests {
         assert!(look_now(Some((secs(30), false)), false));
     }
 
-    /// Reads this PC's WSL distributions the way the app does, every 2 seconds for a
+    /// A folder of its own in the temp folder, removed when dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            let dir = std::env::temp_dir().join(format!("trayward-collector-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn known(id: &str, distro: Option<&str>) -> Known {
+        Known { id: id.into(), cwd: "/home/u/app".into(), distro: distro.map(str::to_string) }
+    }
+
+    /// Windows' config folder, and a distribution's two (root's and a user's), the
+    /// latter only while this pass may read it.
+    #[test]
+    fn finds_the_config_folder_of_a_session() {
+        let dir = TempDir::new("configs");
+        let windows = dir.0.join("windows");
+        let (root, user) = (dir.0.join("root"), dir.0.join("user"));
+        let mut c = Collector::new(&windows);
+        c.wsl_sources = vec![
+            Source { distro: Some("Ubuntu".into()), config_dir: root.clone() },
+            Source { distro: Some("Ubuntu".into()), config_dir: user.clone() },
+            Source { distro: Some("Debian".into()), config_dir: dir.0.join("other") },
+        ];
+        assert_eq!(c.configs_for(None), std::slice::from_ref(&windows));
+        // Not read in this pass: none.
+        assert!(c.configs_for(Some("Ubuntu")).is_empty());
+        assert_eq!(c.config_of("a", "/home/u/app", Some("Ubuntu")), None);
+        c.wsl_now = vec!["Ubuntu".into()];
+        assert_eq!(c.configs_for(Some("Ubuntu")), [root.clone(), user.clone()]);
+        assert_eq!(c.config_of("w", r"c:\dev\app", None), Some(windows));
+        // Not found in either: the first, and not looked for again for a while.
+        assert_eq!(c.config_of("a", "/home/u/app", Some("Ubuntu")), Some(root.clone()));
+        assert!(matches!(c.session_configs.get("a"), Some((None, _))));
+        // Found in the user's: remembered.
+        let transcript = user.join("projects").join("-home-u-app").join("b.jsonl");
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "{}\n").unwrap();
+        assert_eq!(c.config_of("b", "/home/u/app", Some("Ubuntu")), Some(user.clone()));
+        std::fs::remove_file(&transcript).unwrap();
+        assert_eq!(c.config_of("b", "/home/u/app", Some("Ubuntu")), Some(user));
+        // Looked for long ago: again.
+        c.session_configs.insert("a".into(), (None, Instant::now().checked_sub(LOOK_AGAIN * 2).unwrap()));
+        assert_eq!(c.config_of("a", "/home/u/app", Some("Ubuntu")), Some(root));
+    }
+
+    #[test]
+    fn looks_into_a_distribution_while_it_has_sessions() {
+        let mut c = Collector::new(Path::new("nowhere"));
+        assert!(c.looks_into("Ubuntu", &[]));
+        c.wsl_looked.insert("Ubuntu".into(), (Instant::now(), false));
+        assert!(!c.looks_into("Ubuntu", &[known("x", Some("Debian")), known("y", None)]));
+        assert!(c.looks_into("Ubuntu", &[known("x", Some("Ubuntu"))]));
+        c.wsl_looked.insert("Ubuntu".into(), (Instant::now(), true));
+        assert!(c.looks_into("Ubuntu", &[]));
+    }
+
+    /// A window's name, from the lock of a VS Code window (here: this test's
+    /// process, which runs), kept for a while.
+    #[test]
+    fn names_the_window_of_a_session() {
+        let dir = TempDir::new("names");
+        let config = dir.0.join(".claude");
+        let app = dir.0.join("my-app");
+        std::fs::create_dir_all(config.join("ide")).unwrap();
+        std::fs::create_dir_all(&app).unwrap();
+        let lock = serde_json::json!({ "pid": std::process::id(), "workspaceFolders": [app.display().to_string()] });
+        std::fs::write(config.join(r"ide\1.lock"), lock.to_string()).unwrap();
+        let mut c = Collector::new(&config);
+        let cwd = app.join("src").display().to_string();
+        assert_eq!(c.window_name(None, &cwd, None).as_deref(), Some("my-app"));
+        assert_eq!(c.window_name(None, &cwd, Some("🧩 ${rootName}")).as_deref(), Some("my-app"), "kept");
+        c.names.clear();
+        assert_eq!(c.window_name(None, &cwd, Some("🧩 ${rootName}")).as_deref(), Some("🧩 my-app"));
+        // A distribution this pass doesn't read: no locks, no name.
+        assert_eq!(c.window_name(Some("Ubuntu"), "/home/u/app", None), None);
+        // An old name is looked up again.
+        let old = Instant::now().checked_sub(NAME_TTL * 2).unwrap();
+        c.names.insert((None, cwd.clone()), (old, Some("old".into())));
+        assert_eq!(c.window_name(None, &cwd, None).as_deref(), Some("my-app"));
+    }
+
+    /// The GPG key timer: nothing is run again before it's due.
+    #[test]
+    fn asks_about_the_gpg_key_only_when_due() {
+        let mut c = Collector::new(Path::new("nowhere"));
+        let req = |gpg, force| Request { known: Vec::new(), force, transcripts: false, wsl: false, gpg };
+        // Off, looked up a moment ago.
+        c.gpg_found = Some(Instant::now());
+        c.gpg_checked = Some(Instant::now());
+        assert_eq!(c.gpg_pass(&req(false, false), &[]), (None, None));
+        assert!(c.gpg_checked.is_none());
+        // On, asked a moment ago.
+        c.gpg_checked = Some(Instant::now());
+        assert_eq!(c.gpg_pass(&req(true, false), &[]), (None, None));
+        assert!(c.gpg_found.is_none());
+        assert!(c.gpg(false, &[]).is_none());
+    }
     /// minute and a half, and prints which run and which were read. To see that a
     /// stopped one stays stopped: `cargo test wsl_on_this_pc -- --ignored --nocapture`,
     /// and `wsl --terminate <distribution>` while it runs.
