@@ -323,5 +323,112 @@ mod tests {
         assert_eq!(v["hooks"]["Foo"], json!([{ "matcher": "x" }]));
         remove(&mut v);
         assert_eq!(v["hooks"]["Foo"], json!([{ "matcher": "x" }]));
+        // Not an object at all, or hooks that aren't one: ours go in all the same.
+        let mut list = json!([1, 2]);
+        add(&mut list, EXE);
+        assert_eq!(state(&list, EXE), State::On);
+        let mut odd = json!({ "hooks": 5 });
+        add(&mut odd, EXE);
+        assert_eq!(state(&odd, EXE), State::On);
+        // Nothing to remove from where there are no hooks.
+        let mut none = json!({ "hooks": "x" });
+        remove(&mut none);
+        assert_eq!(none, json!({ "hooks": "x" }));
+    }
+
+    fn config_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trayward-tracking-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn switches_tracking_in_a_settings_file() {
+        crate::i18n::set(crate::i18n::Choice::English);
+        let dir = config_dir("switch");
+        // No folder, no file yet: off, and switching off changes nothing.
+        assert_eq!(current(&dir), State::Off);
+        set(&dir, false).unwrap();
+        assert!(!settings_path(&dir).exists());
+        set(&dir, true).unwrap();
+        assert_eq!(current(&dir), State::On);
+        // Switched on again: nothing to write.
+        set(&dir, true).unwrap();
+        let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
+        assert!(text.ends_with("}\n") && text.contains(hook::ARG));
+        set(&dir, false).unwrap();
+        assert_eq!(current(&dir), State::Off);
+        assert_eq!(std::fs::read_to_string(settings_path(&dir)).unwrap(), "{}\n");
+        // No temporary file is left behind.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_settings_as_editors_leave_them() {
+        let dir = config_dir("editors");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = settings_path(&dir);
+        std::fs::write(&path, "  \n").unwrap();
+        assert_eq!(read(&path), Ok(json!({})));
+        std::fs::write(&path, "\u{feff}{\"model\": \"opus\"}").unwrap();
+        set(&dir, true).unwrap();
+        let v = read(&path).unwrap();
+        assert_eq!((v["model"].as_str(), state(&v, &exe_path().unwrap())), (Some("opus"), State::On));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn leaves_a_settings_file_it_cannot_use_alone() {
+        crate::i18n::set(crate::i18n::Choice::English);
+        let dir = config_dir("broken");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = settings_path(&dir);
+        // Not JSON: unchanged, with a word why.
+        std::fs::write(&path, "{ cut off").unwrap();
+        assert!(set(&dir, true).unwrap_err().contains("isn't valid JSON"));
+        assert_eq!(current(&dir), State::Off);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ cut off");
+        // Hooks Claude Code wouldn't write.
+        std::fs::write(&path, r#"{"hooks": {"Stop": "x"}}"#).unwrap();
+        assert!(set(&dir, true).unwrap_err().contains("hooks.Stop"));
+        // A folder where the file should be: it can't be read.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(set(&dir, true).unwrap_err().starts_with("Can't read"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_settings_file_that_cannot_be_written_stays() {
+        crate::i18n::set(crate::i18n::Choice::English);
+        let dir = config_dir("unwritable");
+        // Where the file would go, its folder is a file.
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::fs::write(&dir, b"").unwrap();
+        assert!(set(&dir, true).is_err());
+        let err = write(&dir.join("settings.json"), &json!({})).unwrap_err();
+        assert!(err.starts_with("Can't write"), "{err}");
+        assert!(exe_path().unwrap().contains("trayward_core"));
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    #[test]
+    fn writes_through_a_link_to_the_file_it_points_to() {
+        let dir = config_dir("link");
+        let real = dir.join("dotfiles").join("claude-settings.json");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "{}").unwrap();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&real, settings_path(&dir));
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&real, settings_path(&dir));
+        // Windows makes links only in developer mode or as an administrator.
+        if linked.is_ok() {
+            set(&dir, true).unwrap();
+            assert!(std::fs::symlink_metadata(settings_path(&dir)).unwrap().file_type().is_symlink());
+            assert!(std::fs::read_to_string(&real).unwrap().contains(hook::ARG));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

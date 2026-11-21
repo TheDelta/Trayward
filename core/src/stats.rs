@@ -2939,6 +2939,54 @@ mod tests {
         crate::keep::set_enabled(false);
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    #[test]
+    fn small_parts() {
+        let s = Summary { turns: vec![30, 90, 60], ..Summary::default() };
+        assert_eq!((s.longest_turn(), s.median_turn(), s.working_secs()), (Some(90), Some(60), 180));
+        assert_eq!(Summary::default().longest_turn(), None);
+        // Cut after `max` characters, lines joined, control characters made spaces.
+        assert_eq!(shorten("abc\ndef", 4), "abc ↵ d…");
+        assert_eq!(shorten("a\u{7}b", 10), "a b");
+        let multi = serde_json::json!({"edits": [{"new_string": "a\nb", "old_string": "c"}, {"new_string": "d"}]});
+        let (_, _, added, removed) = describe("MultiEdit", &multi);
+        assert_eq!((added, removed), (3, 1));
+        let notebook = serde_json::json!({"notebook_path": "n.ipynb", "new_source": "x\ny"});
+        let (_, path, added, removed) = describe("NotebookEdit", &notebook);
+        assert_eq!((path.as_deref(), added, removed), (Some("n.ipynb"), 2, 0));
+        let labels: Vec<&str> = Period::ALL.iter().map(|p| p.label()).collect();
+        assert_eq!(labels, ["Today", "7 days", "30 days", "All time"]);
+    }
+
+    #[test]
+    fn lists_the_files_of_a_session() {
+        let s = sample();
+        let files = session_files(&s, None);
+        let a = files.iter().find(|f| f.path == "a.rs").unwrap();
+        assert_eq!((a.edits, a.added, a.removed, a.reads), (1, 2, 1, 0));
+        let mut more = s.clone();
+        more.line(&assistant(
+            "m9",
+            "2026-11-11T12:00:00Z",
+            1,
+            1,
+            r#"{"type":"tool_use","id":"t9","name":"Read","input":{"file_path":"b.rs"}}"#,
+        ));
+        let files = session_files(&more, Some(&"Ubuntu".to_string()));
+        // Edited first, then read.
+        assert_eq!(files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["a.rs", "b.rs"]);
+        assert!(files.iter().all(|f| f.distro.as_deref() == Some("Ubuntu")));
+    }
+
+    #[test]
+    fn tells_how_far_reading_got() {
+        let p = Arc::new(Progress::default());
+        progress(|p| p.done.store(9, std::sync::atomic::Ordering::Relaxed));
+        report_to(p.clone());
+        progress(|p| p.total.store(4, std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(p.total.load(std::sync::atomic::Ordering::Relaxed), 4);
+        assert_eq!(p.done.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 }
 
 #[cfg(test)]

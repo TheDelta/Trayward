@@ -860,4 +860,169 @@ mod tests {
         assert!(online < discovery && discovery < state && state < event && event < offline);
         assert_eq!(rest.last(), Some(&0x00), "ends with DISCONNECT");
     }
+
+    #[test]
+    fn says_what_is_wrong() {
+        i18n::set(i18n::Choice::English);
+        assert!(BadAddress::NotMqtt.text().contains("mqtt://"));
+        assert!(BadAddress::Host.text().contains("host name"));
+        assert!(BadAddress::Port.text().contains("65535"));
+        for (code, says) in
+            [(1, "3.1.1"), (2, "client id"), (3, "unavailable"), (5, "not authorised"), (9, "answered 9")]
+        {
+            assert!(connack_error(code).unwrap().contains(says), "{code}");
+        }
+        // A whole address, with a port in the port field that isn't one.
+        assert_eq!(Broker::new(false, "mqtt://ha", "x", "", None), Err(BadAddress::Port));
+        assert_eq!(Broker::new(false, "mqtt://bro ker", "", "", None), Err(BadAddress::NotMqtt));
+        let n = node();
+        assert!(!n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_".contains(c)));
+    }
+
+    /// One MQTT packet: its header byte and its body.
+    fn read_packet(s: &mut impl Read) -> Option<(u8, Vec<u8>)> {
+        let mut b = [0u8; 1];
+        s.read_exact(&mut b).ok()?;
+        let header = b[0];
+        let (mut len, mut shift) = (0usize, 0);
+        loop {
+            s.read_exact(&mut b).ok()?;
+            len |= usize::from(b[0] & 0x7F) << shift;
+            shift += 7;
+            if b[0] & 0x80 == 0 {
+                break;
+            }
+        }
+        let mut body = vec![0; len];
+        s.read_exact(&mut body).ok()?;
+        Some((header, body))
+    }
+
+    /// A stand-in broker on this PC for one connection: answers CONNECT with `ack`
+    /// (none: hangs up), each PINGREQ with the next of `pongs` (none left: hangs
+    /// up), and returns the headers of the packets it got.
+    fn stand_in(ack: Option<[u8; 4]>, pongs: Vec<[u8; 2]>) -> (Broker, std::thread::JoinHandle<Vec<u8>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let broker = parse(&format!("mqtt://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut got = Vec::new();
+            let mut pongs = pongs.into_iter();
+            while let Some((header, _)) = read_packet(&mut s) {
+                got.push(header);
+                let answer = match header {
+                    0x10 => ack.map(Vec::from),
+                    0xC0 => pongs.next().map(Vec::from),
+                    _ => continue,
+                };
+                let Some(answer) = answer else { break };
+                if s.write_all(&answer).is_err() {
+                    break;
+                }
+            }
+            got
+        });
+        (broker, handle)
+    }
+
+    fn new_link() -> (Link<impl Fn(Status)>, std::sync::mpsc::Receiver<Status>) {
+        i18n::set(i18n::Choice::English);
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Link::new(move |s| drop(tx.send(s))), rx)
+    }
+
+    #[test]
+    fn tells_why_a_broker_turned_it_away() {
+        for (ack, says) in
+            [(Some([0x20, 2, 0, 5]), "not authorised"), (Some([0x30, 2, 0, 0]), "no answer"), (None, "no answer")]
+        {
+            let (broker, handle) = stand_in(ack, Vec::new());
+            let (mut link, status) = new_link();
+            assert_eq!(link.wait(), Duration::from_secs(3600));
+            link.command(Command::Config(Some(broker.clone())));
+            link.connect();
+            let err = status.try_recv().unwrap().unwrap_err();
+            assert!(err.contains(says), "{err}");
+            assert_eq!(link.failures, 1);
+            // Not again before its time, and the same broker once more changes nothing.
+            assert!(link.wait() > Duration::from_secs(1));
+            link.connect();
+            link.command(Command::Config(Some(broker)));
+            assert_eq!(link.failures, 1);
+            assert!(status.try_recv().is_err());
+            // Test: try now.
+            assert!(!link.command(Command::Test));
+            assert!(link.wait() <= Duration::from_millis(10));
+            drop(link);
+            let _ = handle.join();
+        }
+    }
+
+    #[test]
+    fn a_broker_that_is_not_there() {
+        // A port nobody listens on any more.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let broker = parse(&format!("mqtt://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+        drop(listener);
+        let (mut link, status) = new_link();
+        link.command(Command::Config(Some(broker)));
+        link.connect();
+        assert!(status.try_recv().unwrap().is_err());
+        // Over TLS, to something that hangs up.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut tls = parse(&format!("mqtts://127.0.0.1:{}", listener.local_addr().unwrap().port())).unwrap();
+        tls.tls = true;
+        let handle = std::thread::spawn(move || drop(listener.accept()));
+        let (mut link, status) = new_link();
+        link.command(Command::Config(Some(tls)));
+        link.connect();
+        assert!(status.try_recv().unwrap().unwrap_err().starts_with("TLS: "));
+        drop(link);
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn keeps_the_connection_and_notices_it_lost() {
+        let (broker, handle) = stand_in(Some([0x20, 2, 0, 0]), vec![[0xD0, 0x00], [0x00, 0x00]]);
+        let (mut link, status) = new_link();
+        link.command(Command::Discovery(vec![("t/a".into(), "1".into())]));
+        link.command(Command::Config(Some(broker)));
+        link.connect();
+        assert_eq!(status.try_recv().unwrap(), Ok(()));
+        assert!(link.wait() <= PING_EVERY);
+        // The same discovery again sends nothing; a changed one only what changed.
+        assert!(!link.command(Command::Discovery(vec![("t/a".into(), "1".into())])));
+        assert!(!link.command(Command::Discovery(vec![("t/a".into(), "1".into()), ("t/b".into(), "2".into())])));
+        // Test: a ping, and its answer reported though nothing changed.
+        assert!(!link.command(Command::Test));
+        assert_eq!(status.try_recv().unwrap(), Ok(()));
+        // Nothing sent for a while: a ping, and a wrong answer means the connection is gone.
+        assert!(!link.keep_alive());
+        if let Some(c) = link.conn.as_mut() {
+            c.last_sent = Instant::now().checked_sub(PING_EVERY).unwrap_or(c.last_sent);
+        }
+        assert!(link.keep_alive());
+        link.lost();
+        assert_eq!(status.try_recv().unwrap(), Err("connection lost".into()));
+        assert!(link.conn.is_none() && link.wait() > Duration::from_secs(1));
+        // Publishing while not connected loses nothing.
+        assert!(!link.command(Command::State("{}".into())) && !link.command(Command::Event("{}".into())));
+        assert!(!link.command(Command::Stop));
+        drop(link);
+        let got = handle.join().unwrap();
+        // CONNECT, online, the two configs, two pings.
+        assert_eq!(got, [0x10, 0x31, 0x31, 0x31, 0xC0, 0xC0]);
+    }
+
+    #[test]
+    fn stops_when_the_app_goes_away() {
+        let (status, _rx) = std::sync::mpsc::channel::<Status>();
+        let tx = spawn(move |s| drop(status.send(s)));
+        tx.send(Command::Test).unwrap();
+        // The app gone: the thread ends.
+        drop(tx);
+        let (tx, rx) = std::sync::mpsc::channel::<Command>();
+        drop(tx);
+        run(rx, |_| {});
+    }
 }

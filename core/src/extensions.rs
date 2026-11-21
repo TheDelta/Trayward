@@ -542,4 +542,80 @@ mod tests {
         assert_eq!((snap.files.len(), snap.more), (MAX_FILES, 2));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn every_row_reads_as_text() {
+        crate::i18n::set(crate::i18n::Choice::English);
+        let e = parse(FULL, 0).unwrap();
+        assert_eq!(e.tooltip[0].text(0), "42 %");
+        assert_eq!(e.tooltip[2].text(0), "Copying photos");
+        let e = parse(
+            r#"{"version":1,"id":"a","label":"A","flyout":[{"type":"text","value":"y","state":"warn"},{"type":"progress","value":1,"max":null}]}"#,
+            0,
+        )
+        .unwrap();
+        assert_eq!((e.flyout[0].state, e.flyout[1].text(0).as_str()), (State::Warn, "1 %"));
+        let bad = |s: &str| parse(s, 0).unwrap_err();
+        assert!(bad(r#"{"version":1,"id":"a","label":"A","flyout":[5]}"#).contains("isn't an object"));
+        assert!(bad(r#"{"version":1,"id":"a","label":"A","stale_after":-5}"#).contains("stale_after"));
+        // Lower-case Z, and a zone of its own.
+        let row = |v: &str| {
+            parse(&format!(r#"{{"version":1,"id":"a","label":"A","tooltip":[{{"type":"time","value":"{v}"}}]}}"#), 0)
+        };
+        assert!(row("2026-11-18T22:00:00z").is_ok() && row("2026-11-18T23:00:00-01:00").is_ok());
+        assert!(row("2026-11-18T23:00:00+0100").is_err());
+    }
+
+    #[test]
+    fn its_folder_is_in_the_apps_own() {
+        // Where it would be: nothing in it is read or made.
+        assert!(dir().is_none_or(|d| d.ends_with(Path::new("Trayward").join("extensions"))));
+    }
+
+    #[test]
+    fn a_file_that_grew_too_large_or_is_not_text() {
+        let dir = std::env::temp_dir().join(format!("trayward-extensions-limits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("big.json");
+        std::fs::write(&big, vec![b' '; MAX_BYTES as usize + 1]).unwrap();
+        assert!(read_limited(&big).unwrap_err().contains("KB"));
+        let binary = dir.join("binary.json");
+        std::fs::write(&binary, [0xFF, 0xFE, 0x00]).unwrap();
+        assert_eq!(read_limited(&binary).unwrap_err(), "not UTF-8 text");
+        assert!(read_limited(&dir.join("gone.json")).unwrap_err().starts_with("can't be read"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn looks_again_when_the_folder_changes() {
+        let dir = std::env::temp_dir().join(format!("trayward-extensions-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut reader = Reader::default();
+        // The folder is made when it's missing, and read the first time.
+        let first = reader.snapshot(Some(dir.clone()), false);
+        assert!(dir.is_dir() && first.files.is_empty());
+        reader.last = Some(first.clone());
+        // Nothing changed, nothing asked: the last look.
+        reader.wait();
+        assert_eq!(reader.snapshot(Some(dir.clone()), false), first);
+        std::fs::write(dir.join("a.json"), r#"{"version":1,"id":"a","label":"A"}"#).unwrap();
+        // Told of the change (where the system tells), or asked to look.
+        reader.wait();
+        let asked = !reader.changed;
+        let snap = reader.snapshot(Some(dir.clone()), asked);
+        assert_eq!(snap.extensions().count(), 1);
+        // Switched off: nothing kept, nothing watched.
+        assert_eq!(reader.snapshot(None, false), Snapshot::default());
+        assert!(reader.known.is_empty() && reader.watch.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_nothing_while_off() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let poke = Arc::new(AtomicBool::new(true));
+        spawn(move |s| drop(tx.send(s)), Arc::new(AtomicBool::new(false)), poke);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Snapshot::default());
+    }
 }

@@ -722,5 +722,68 @@ mod tests {
             plan_name(&serde_json::json!({"access_type_sku": "plus_monthly_subscriber_quota"})).as_deref(),
             Some("Pro+")
         );
+        assert_eq!(plan_name(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn follows_the_model() {
+        let auto = line("10:00:01", "session.auto_mode_resolved", r#"{"chosenModel":"gpt-6"}"#);
+        assert_eq!(parse(&[start(), auto.clone()]).model.as_deref(), Some("gpt-6"));
+        let change = line("10:00:02", "session.model_change", r#"{"newModel":"claude-opus-5-5"}"#);
+        assert_eq!(parse(&[start(), auto.clone(), change]).model.as_deref(), Some("claude-opus-5-5"));
+        // Without a name: the one before stays.
+        let empty = line("10:00:03", "session.model_change", r#"{"newModel":""}"#);
+        assert_eq!(parse(&[start(), auto, empty]).model.as_deref(), Some("gpt-6"));
+        // A tool's end without its id ends nothing.
+        let tool = line("10:00:04", "tool.execution_start", r#"{"toolCallId":"call_1","toolName":"x"}"#);
+        let done = line("10:00:05", "tool.execution_complete", r#"{"success":true}"#);
+        assert_eq!(parse(&[start(), tool, done]).open_tools.len(), 1);
+        // A type it reads with a key order it doesn't expect, and one it doesn't know.
+        let mut p = Parsed::default();
+        parse_line(&mut p, r#"{"data":{},"type":"something.new"}"#);
+        assert_eq!(p, Parsed::default());
+        // Without a folder name, the session's own id.
+        let s = session("", &parse(&[start()]), "", t("10:00:00"), t("10:00:10")).unwrap();
+        assert_eq!((s.id.as_str(), s.cwd.as_str()), ("copilot:e94d9f6e-0000-4000-8000-000000000001", "C:\\work\\shop"));
+        assert_eq!(session("", &Parsed::default(), "", 0, 0), None);
+    }
+
+    #[test]
+    fn finds_a_sessions_name_and_events() {
+        let dir = std::env::temp_dir().join(format!("trayward-copilot-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("workspace.yaml"), WORKSPACE).unwrap();
+        assert_eq!(name_of(&dir.join("events.jsonl")).as_deref(), Some("Fix the \"cart\" total"));
+        assert_eq!(name_of(&dir.join("elsewhere").join("events.jsonl")), None);
+        // Ids that can't be a session folder's: looked up nowhere.
+        for id in ["copilot:", "copilot:a/b", "copilot:..", "copilot:a\\b", "codex:abc"] {
+            assert_eq!(events_of(id), None, "{id}");
+        }
+        // Off (as in the tests): no files for the statistics.
+        assert!(event_files().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lock_is_held_by_a_running_process_that_wrote_it() {
+        let me = std::process::id();
+        let now = crate::os::now_ms() / 1000;
+        assert!(holds_lock(me, now));
+        assert!(locks(Path::new("no-such-folder-anywhere")).is_empty());
+    }
+
+    #[test]
+    fn looks_only_while_on() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn(move |s| drop(tx.send(s)), Arc::new(AtomicBool::new(false)));
+        // Off: one empty list, then nothing more.
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Vec::new());
+        // The limit isn't asked for while off, and nothing is told.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let poke = Arc::new(AtomicBool::new(true));
+        spawn_quota(move |q| drop(tx.send(q)), Arc::new(AtomicBool::new(false)), poke.clone());
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(poke.load(Ordering::Relaxed));
     }
 }

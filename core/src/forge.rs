@@ -1042,5 +1042,164 @@ mod tests {
         // Nothing new, or seen for the first time: nothing to say.
         assert!(news(&running, &running).is_empty());
         assert!(news(&Snapshot::default(), &running).is_empty());
+        // A session's branch counts too; a canceled pipeline is news, a pipeline that runs on isn't.
+        let branch = |c: Change| Snapshot {
+            sessions: HashMap::from([(
+                "C:\\work\\p".to_string(),
+                Branch { name: "fix".into(), checks: c.checks, change: Some(c) },
+            )]),
+            ..Snapshot::default()
+        };
+        let on_branch = branch(mr(Some(Checks::Running), State::Open));
+        assert_eq!(news(&on_branch, &branch(mr(Some(Checks::Canceled), State::Open)))[0].1, News::Canceled);
+        assert!(news(&on_branch, &branch(mr(None, State::Open))).is_empty());
+        assert!(
+            news(&snap(mr(Some(Checks::Passed), State::Open)), &snap(mr(Some(Checks::Failed), State::Open))).is_empty()
+        );
+        // Failures first.
+        let two = |a: Change, b: Change| Snapshot { mine: vec![a, b], ..Snapshot::default() };
+        let other = |c: Change| Change { url: "v".into(), ..c };
+        let before = two(mr(Some(Checks::Running), State::Open), other(mr(Some(Checks::Running), State::Open)));
+        let after = two(mr(Some(Checks::Passed), State::Open), other(mr(Some(Checks::Failed), State::Open)));
+        assert_eq!(news(&before, &after).iter().map(|(_, n)| *n).collect::<Vec<_>>(), [News::Failed, News::Passed]);
+    }
+
+    #[test]
+    fn reads_every_pipeline_state() {
+        for (status, checks) in [
+            ("running", Some(Checks::Running)),
+            ("WAITING_FOR_RESOURCE", Some(Checks::Running)),
+            ("EXPECTED", Some(Checks::Running)),
+            ("SUCCESS", Some(Checks::Passed)),
+            ("FAILURE", Some(Checks::Failed)),
+            ("ERROR", Some(Checks::Failed)),
+            ("CANCELED", Some(Checks::Canceled)),
+            ("canceling", Some(Checks::Canceled)),
+            ("SKIPPED", None),
+            ("MANUAL", None),
+        ] {
+            assert_eq!(checks_of(status), checks, "{status}");
+        }
+    }
+
+    #[test]
+    fn skips_what_it_does_not_understand_in_an_answer() {
+        let gitlab = |v: Value| change_of(Forge::GitLab, &v);
+        // A number that isn't one, no address, no state: nothing.
+        assert_eq!(gitlab(json!({"iid": "x", "webUrl": "u", "state": "opened"})), None);
+        assert_eq!(gitlab(json!({"iid": "1", "state": "opened"})), None);
+        assert_eq!(gitlab(json!({"iid": "1", "webUrl": "u"})), None);
+        assert_eq!(change_of(Forge::GitHub, &json!({"number": "1", "url": "u", "state": "OPEN"})), None);
+        // The least there can be: no title, project, pipeline or time.
+        let c = gitlab(json!({"iid": "3", "webUrl": "u", "state": "closed"})).unwrap();
+        assert_eq!(
+            (c.state, c.title.as_str(), c.project.as_str(), c.checks, c.updated),
+            (State::Closed, "", "", None, 0)
+        );
+        let c = change_of(
+            Forge::GitHub,
+            &json!({"number": 4, "url": "u", "state": "OPEN", "isDraft": true,
+            "updatedAt": "2026-11-12T10:00:00Z", "commits": {"nodes": []}}),
+        )
+        .unwrap();
+        assert!(c.draft && c.state == State::Open && c.checks.is_none() && c.updated > 0);
+        // An answer without data (an error) or without the user's own.
+        let (branches, mine) = parse(Forge::GitHub, &json!({"errors": [{"message": "x"}]}), 2);
+        assert_eq!((branches, mine), (vec![None, None], Vec::new()));
+        // A GitHub branch without a pull request: no pipeline of its own.
+        let answer = json!({"data": {"b0": {"pullRequests": {"nodes": []}}}});
+        assert_eq!(parse(Forge::GitHub, &answer, 1).0, vec![Some((None, None))]);
+    }
+
+    #[test]
+    fn reads_odd_remotes_and_configs() {
+        assert!(parse_remote("https:///group/project").is_none());
+        assert!(parse_remote("git@gitlab.example.com:project").is_none());
+        assert!(parse_remote("https://gitlab.example.com").is_none());
+        let r = parse_remote("ssh://git@GitHub.com/o/r.git").unwrap();
+        assert_eq!((r.forge, r.host.as_str()), (Forge::GitHub, "github.com"));
+        assert_eq!(origin_url("[remote \"origin\"]\n\tfetch = +refs/heads/*\n\tnot a setting\n"), None);
+        assert_eq!(origin_url("[remote \"origin\"]\n[core]\n\turl = elsewhere\n"), None);
+        assert_eq!(origin_url(""), None);
+        assert_eq!(program(Forge::GitLab), "glab");
+        assert_eq!(program(Forge::GitHub), "gh");
+        assert_eq!(date_at_start("2027-11"), None);
+        assert_eq!(github_expiry(""), None);
+    }
+
+    #[test]
+    fn a_folder_without_a_branch_has_none() {
+        let base = std::env::temp_dir().join(format!("trayward-forge-odd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // Detached HEAD: no branch to ask about.
+        let detached = base.join("detached");
+        std::fs::create_dir_all(detached.join(".git")).unwrap();
+        std::fs::write(detached.join(".git").join("HEAD"), "0123456789abcdef\n").unwrap();
+        assert!(repo_of(&detached.display().to_string()).is_none());
+        // No config, or no origin in it.
+        let bare = base.join("bare");
+        std::fs::create_dir_all(bare.join(".git")).unwrap();
+        std::fs::write(bare.join(".git").join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(repo_of(&bare.display().to_string()).is_none());
+        std::fs::write(bare.join(".git").join("config"), "[core]\n").unwrap();
+        assert!(repo_of(&bare.display().to_string()).is_none());
+        // A `.git` file that isn't a pointer; a worktree without a common folder of its own.
+        let odd = base.join("odd");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::write(odd.join(".git"), "something else\n").unwrap();
+        assert!(git_dirs(&odd).is_none());
+        let wt = base.join("wt");
+        let own = base.join("wt-git");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", own.display())).unwrap();
+        assert_eq!(git_dirs(&wt), Some((own.clone(), own.clone())));
+        std::fs::write(own.join("HEAD"), "ref: refs/heads/feat\n").unwrap();
+        std::fs::write(own.join("config"), "[remote \"origin\"]\n\turl = https://github.com/o/r\n").unwrap();
+        let (repo, branch) = repo_of(&wt.display().to_string()).unwrap();
+        assert_eq!((repo.forge, repo.path.as_str(), branch.as_str()), (Forge::GitHub, "o/r", "feat"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn asks_a_tool_its_version_once() {
+        let mut logins = Logins::default();
+        assert_eq!(logins.version(None), None);
+        assert_eq!(logins.version(Some("C:\\no-such-folder\\no-such-tool.exe")), None);
+        // Cargo answers like glab: "cargo 1.90.0 (hash date)" → without the part in brackets.
+        let cargo = env!("CARGO");
+        let version = logins.version(Some(cargo)).unwrap();
+        assert!(version.starts_with("cargo ") && !version.contains('('), "{version}");
+        // The missing one is remembered too: not tried again every minute.
+        assert_eq!(logins.versions.len(), 2);
+        assert_eq!(logins.version(Some(cargo)), Some(version));
+    }
+
+    #[test]
+    fn tells_whether_the_tools_are_there_while_off() {
+        // Looked up in PATH only: nothing is run while it's off.
+        let found = Tools::found();
+        assert!(!found.asked && found.glab.hosts.is_empty() && found.gh.version.is_none());
+        assert_eq!(found.glab.found, found.glab.path.is_some());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let poke = Arc::new(AtomicU64::new(0));
+        let folders = Arc::new(Mutex::new(vec!["C:\\work\\p".to_string()]));
+        spawn(move |s| drop(tx.send(s)), Arc::new(AtomicBool::new(false)), poke.clone(), folders);
+        let first = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!((first.answers, first.tools.clone(), first.sessions.len()), (0, found.clone(), 0));
+        // Poked (a token was pasted): told again, though nothing changed.
+        poke.store(1, Ordering::Relaxed);
+        let again = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!((again.answers, again.tools), (1, found));
+    }
+
+    #[test]
+    fn never_shows_a_token_anywhere_in_a_message() {
+        assert_eq!(redact("ends with gldt-abc", None), "ends with [token]");
+        assert_eq!(redact("glptt-x and gho_y", Some("")), "[token] and [token]");
+        assert_eq!(redact("", Some("secret")), "");
+        assert!(looks_like_token(&"a".repeat(255)));
+        assert!(!looks_like_token(&"a".repeat(256)));
+        assert!(!looks_like_token(&format!("{}\u{e9}", "a".repeat(30))));
     }
 }

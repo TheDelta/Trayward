@@ -1044,4 +1044,183 @@ mod tests {
         let h = history(now);
         assert!(h.iter().any(|s| s.used == WEEKLY_USED));
     }
+
+    #[test]
+    fn every_session_reads_back() {
+        let now = 1_794_406_200;
+        let mut rng = Rng(7);
+        for (i, spec) in SPECS.iter().enumerate() {
+            // Two hours off UTC: the closed ones move out of the night.
+            let lines = transcript(&mut rng, spec, &session_id(i), "C:\\demo\\p", now, 2 * HOUR);
+            let mut stats = crate::stats::Stats::default();
+            for l in &lines {
+                stats.line(l);
+            }
+            assert_eq!(stats.title.as_deref(), Some(spec.title), "{}", spec.title);
+            assert_eq!(stats.prompts.len(), spec.turns, "{}", spec.title);
+            let last = stats.last_at.unwrap();
+            assert!(last <= now - spec.ended_ago + 60, "{}", spec.title);
+            // A nearly full context gets compacted only now and then; the others never fill up.
+            assert!(lines.iter().all(|l| serde_json::from_str::<Value>(l).is_ok()));
+        }
+    }
+
+    #[test]
+    fn moves_work_out_of_the_night() {
+        let midnight = 1_794_355_200; // 2026-11-11T00:00:00Z
+        assert_eq!(daytime(midnight + 12 * HOUR, 0), midnight + 12 * HOUR);
+        // 03:00 goes back to before 01:00, the evening before.
+        assert_eq!(daytime(midnight + 3 * HOUR, 0), midnight - HOUR);
+        assert!(daytime(midnight + 3 * HOUR, 10 * HOUR) == midnight + 3 * HOUR);
+    }
+
+    #[test]
+    fn the_random_numbers_stay_in_their_range() {
+        let mut rng = Rng(3);
+        for _ in 0..200 {
+            assert!((5..=9).contains(&rng.range(5, 9)));
+            assert_eq!(rng.range(4, 4), 4);
+        }
+        assert!(!(0..50).any(|_| rng.chance(0)));
+        assert!((0..50).all(|_| rng.chance(100)));
+        assert!(["a", "b"].contains(rng.pick(&["a", "b"])));
+    }
+
+    #[test]
+    fn plans_and_limits() {
+        // One test switches the plan: the others leave it alone.
+        assert_eq!(plan(), "Max");
+        let now = 1_794_406_200;
+        let u = usage(now);
+        assert_eq!(u.five_hour.map(|l| l.used), Some(31.0));
+        assert_eq!(u.weekly.map(|l| l.resets_at), Some(Some(now + WEEKLY_RESETS_IN)));
+        assert_eq!(u.fable.map(|f| f.share), Some(Some(50.0)));
+        set_plan(1);
+        assert_eq!(plan(), "Ultra");
+        assert!(usage(now).five_hour.is_none());
+        set_plan(99);
+        assert_eq!(plan(), "Ultra");
+        set_plan(0);
+        assert_eq!(plan(), "Max");
+        // Not started in the tests: no demo folders.
+        assert!(!active() && dir().is_none());
+        assert!(codex_dir().is_none() && mailbox_dir().is_none() && extensions_dir().is_none());
+        assert!(copilot_dir().is_none());
+        let q = copilot_quota(now);
+        assert_eq!((q.remaining, q.entitlement, q.plan.as_deref()), (225.0, 300.0, Some("Pro")));
+    }
+
+    #[test]
+    fn gpg_and_the_forges() {
+        use crate::forge::{Checks, State};
+        use crate::gpg::Check;
+        assert_eq!(gpg_check(true), Check::Ready { running: true, cached: true });
+        assert_eq!(gpg_check(false), Check::Found { git: true, gpg: true });
+        let off = tools(false);
+        assert!(!off.asked && off.glab.found && off.glab.version.is_none() && off.gh.hosts.is_empty());
+        let on = tools(true);
+        assert_eq!(on.glab.version.as_deref(), Some("glab 1.52.0"));
+        assert!(on.glab.hosts[0].token && on.glab.hosts[0].expires.is_some());
+        assert!(!on.gh.hosts[0].token && on.gh.hosts[0].expires.is_none());
+
+        let folders: Vec<String> = ["shop", "api", "infra", "docs", "payments"]
+            .iter()
+            .map(|p| Path::new("C:\\demo\\projects").join(p).display().to_string())
+            .collect();
+        let snap = forge(&folders);
+        // Not started: the running pipeline still runs, the pull request is still open.
+        let shop = &snap.sessions[&folders[0]];
+        assert_eq!((shop.name.as_str(), shop.checks), ("feat/checkout-redesign", Some(Checks::Running)));
+        assert_eq!(snap.sessions[&folders[1]].checks, Some(Checks::Failed));
+        assert_eq!(snap.sessions[&folders[3]].change, None);
+        assert_eq!(snap.sessions[&folders[3]].checks, Some(Checks::Passed));
+        assert!(!snap.sessions.contains_key(&folders[4]));
+        // The dashboard has no session: its pull request isn't listed.
+        assert_eq!(snap.mine.len(), 3);
+        assert!(snap.mine.iter().all(|c| c.state == State::Open && c.project != "acme/dashboard"));
+        let mut all = folders.clone();
+        all.push(Path::new("C:\\demo\\projects").join("dashboard").display().to_string());
+        let pr = forge(&all).mine.into_iter().find(|c| c.project == "acme/dashboard").unwrap();
+        assert!(pr.draft && pr.reference() == "#12");
+        assert!(forge(&[]).mine.is_empty());
+    }
+
+    #[test]
+    fn writes_a_whole_demo_folder() {
+        let base = std::env::temp_dir().join(format!("trayward-demo-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // Now, as the file times of Codex's sessions and the mailbox are set from it.
+        let now = crate::os::now_ms() / 1000;
+        let config = generate(&base, now, 0);
+        assert_eq!(config, base.join(".claude"));
+
+        // Claude Code's session list: the open sessions, in its format.
+        let listed: Vec<Value> = std::fs::read_dir(config.join("sessions"))
+            .unwrap()
+            .flatten()
+            .map(|e| serde_json::from_slice(&std::fs::read(e.path()).unwrap()).unwrap())
+            .collect();
+        assert_eq!(listed.len(), SPECS.iter().filter(|s| s.open.is_some()).count());
+        assert!(listed.iter().all(|v| v["pid"].as_u64().is_some_and(|p| p >= u64::from(PID_BASE))));
+        assert!(listed.iter().any(|v| v["status"] == "waiting"));
+        assert!(config.join("ide").read_dir().unwrap().count() > 0);
+
+        // A transcript per session, each in its project's folder.
+        let mut transcripts = 0;
+        for dir in std::fs::read_dir(config.join("projects")).unwrap().flatten() {
+            for f in std::fs::read_dir(dir.path()).unwrap().flatten() {
+                if f.path().extension().is_some_and(|x| x == "jsonl") {
+                    transcripts += 1;
+                    let text = std::fs::read_to_string(f.path()).unwrap();
+                    let mut stats = crate::stats::Stats::default();
+                    text.lines().for_each(|l| stats.line(l));
+                    assert!(stats.title.is_some());
+                }
+            }
+        }
+        assert_eq!(transcripts, SPECS.len());
+        let shop =
+            config.join("projects").join(project_folder(&base.join("projects").join("shop").display().to_string()));
+        let agents = shop.join(session_id(0)).join("subagents");
+        assert_eq!(std::fs::read_dir(&agents).unwrap().count(), 6);
+        let meta: Value =
+            serde_json::from_slice(&std::fs::read(agents.join("agent-demo2.meta.json")).unwrap()).unwrap();
+        assert!(meta["finished"].is_null() && meta["agentType"] == "fork");
+        assert!(shop.join("memory").join("MEMORY.md").is_file());
+        assert!(config.join("file-history").join(session_id(3)).join("v1").is_file());
+        let title = std::fs::read_to_string(base.join("projects").join("shop").join(".vscode").join("settings.json"));
+        assert!(title.unwrap().contains("Shop | ${activeEditorShort}"));
+
+        // Codex: one done, one waiting for an approval; with the Plus plan's limits.
+        let snap = crate::codex::Reader::default().read(&base.join(".codex"), now);
+        assert_eq!(snap.plan.as_deref(), Some("Plus"));
+        assert_eq!(snap.limits.and_then(|l| l.weekly).map(|w| w.used), Some(41.0));
+        let states: Vec<_> = snap.sessions.iter().map(|s| (s.project(), s.status)).collect();
+        assert!(states.contains(&("payments", crate::sessions::Status::Done)), "{states:?}");
+        assert!(states.contains(&("api", crate::sessions::Status::NeedsInput)), "{states:?}");
+
+        // Copilot: a question to the user, while the demo's process holds the session.
+        let held = |pid: u32, _: i64| pid == PID_BASE + 900;
+        let copilot = crate::copilot::Reader::default().read(&base.join(".copilot"), now, held);
+        assert_eq!(copilot.len(), 1);
+        assert_eq!(copilot[0].status, crate::sessions::Status::NeedsInput);
+        assert_eq!(copilot[0].title, "Update the install guide");
+        assert_eq!(copilot[0].model.as_deref(), Some("GPT-5.5"));
+
+        // The mailbox: three unread, for the shop and the API; three handled.
+        let mail = crate::mailbox::read(&base.join(".claude-mailbox"));
+        assert_eq!(mail.unread(), 3);
+        let shop = mail.inbox("shop").unwrap();
+        assert_eq!((shop.unread_count, shop.unread[0].from.as_deref()), (2, Some("infra")));
+        assert_eq!(shop.unread[0].topic, "staging database moved");
+        let docs = mail.inbox("docs").unwrap();
+        assert_eq!((docs.done, docs.last_done), (1, Some(now - 2 * DAY + HOUR)));
+
+        // The extension reads as a valid one.
+        let text = std::fs::read_to_string(base.join("extensions").join("backup.json")).unwrap();
+        let ext = crate::extensions::parse(&text, now).unwrap();
+        assert_eq!((ext.id.as_str(), ext.tooltip.len(), ext.flyout.len()), ("nas-backup", 2, 3));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

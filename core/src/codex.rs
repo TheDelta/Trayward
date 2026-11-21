@@ -541,4 +541,99 @@ mod tests {
         let cut = &"ü\"}\n{\"a\":\"ö\"}\n".as_bytes()[1..];
         assert_eq!(complete_lines(cut, true).collect::<Vec<_>>(), ["{\"a\":\"ö\"}"]);
     }
+
+    #[test]
+    fn reads_every_kind_of_step() {
+        // No session_meta (cut off): the folder comes from the turn's context.
+        let mut p = Parsed::default();
+        parse_line(&mut p, &line("10:00:00", "turn_context", r#"{"cwd":"C:\\work\\api","model":"gpt-6-codex"}"#), true);
+        assert_eq!((p.cwd.as_deref(), p.model.as_deref()), (Some("C:\\work\\api"), Some("gpt-6-codex")));
+        // A later context without a model keeps the one before, and the folder stays.
+        parse_line(&mut p, &line("10:00:01", "turn_context", r#"{"cwd":"C:\\elsewhere"}"#), true);
+        assert_eq!((p.cwd.as_deref(), p.model.as_deref()), (Some("C:\\work\\api"), Some("gpt-6-codex")));
+        // A prompt read from the end of the file isn't the title.
+        parse_line(&mut p, &line("10:01:00", "event_msg", r#"{"type":"user_message","message":"later"}"#), false);
+        assert_eq!((p.title.as_deref(), p.last_prompt), (None, parse_rfc3339("2026-11-12T10:01:00Z")));
+        let step = |p: &mut Parsed, kind: &str, payload: &str| parse_line(p, &line("10:02:00", kind, payload), true);
+        step(&mut p, "response_item", r#"{"type":"local_shell_call"}"#);
+        assert!(p.open_call.is_some());
+        step(&mut p, "response_item", r#"{"type":"custom_tool_call_output"}"#);
+        assert!(p.open_call.is_none());
+        step(&mut p, "response_item", r#"{"type":"custom_tool_call"}"#);
+        step(&mut p, "event_msg", r#"{"type":"turn_aborted"}"#);
+        assert!(p.open_call.is_none() && p.last_reply.is_some());
+        let mut q = Parsed::default();
+        step(&mut q, "response_item", r#"{"type":"message","role":"user"}"#);
+        assert_eq!(q.last_reply, None);
+        step(&mut q, "response_item", r#"{"type":"message","role":"assistant"}"#);
+        assert!(q.last_reply.is_some());
+        // Limits without a percentage aren't limits.
+        step(&mut q, "event_msg", r#"{"type":"token_count","rate_limits":{"primary":{"window_minutes":300}}}"#);
+        assert_eq!(q.limits, None);
+        // A long first prompt is cut.
+        let long = "x".repeat(130);
+        assert_eq!(first_line(&long).chars().count(), 121);
+        assert!(first_line(&long).ends_with('…'));
+        assert_eq!(first_line("\n  \n  second  "), "second");
+        assert_eq!(plan_name(""), "");
+    }
+
+    #[test]
+    fn a_session_without_its_id_takes_the_files() {
+        let p = Parsed { cwd: Some("C:\\work\\shop\\".into()), ..Parsed::default() };
+        let path = Path::new("rollout-2026-11-12T10-00-00-0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b.jsonl");
+        let s = session(path, &p, 100, 100 + 2 * IDLE_AFTER_SECS).unwrap();
+        assert_eq!(
+            (s.id.as_str(), s.status, s.project()),
+            ("codex:0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b", Status::Idle, "shop")
+        );
+        // A short name: all of it.
+        assert_eq!(session(Path::new("short.jsonl"), &p, 0, 0).unwrap().id, "codex:short");
+        let none = Session { cwd: String::new(), ..s };
+        assert_eq!(none.project(), "—");
+    }
+
+    #[test]
+    fn takes_the_newest_limits_of_all_files() {
+        let home = std::env::temp_dir().join(format!("trayward-codex-limits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let day = home.join("sessions").join("2026").join("11").join("12");
+        std::fs::create_dir_all(&day).unwrap();
+        let now = std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let limits = |at: &str, used: f64, plan: &str| {
+            line(
+                at,
+                "event_msg",
+                &format!(
+                    r#"{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":{used}}},"plan_type":"{plan}"}}}}"#
+                ),
+            )
+        };
+        let write = |name: &str, lines: &[String], changed: i64| {
+            let path = day.join(name);
+            std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+            let time = UNIX_EPOCH + std::time::Duration::from_secs(changed as u64);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(time).unwrap();
+        };
+        write("rollout-a.jsonl", &[META.to_string(), limits("10:05:00", 20.0, "plus")], now - 2 * 86_400);
+        write("rollout-b.jsonl", &[META.to_string(), limits("10:01:00", 10.0, "pro")], now - 60);
+        // Too old for the limits, and not a session file.
+        write("rollout-c.jsonl", &[META.to_string(), limits("11:00:00", 90.0, "team")], now - 30 * 86_400);
+        std::fs::write(day.join("notes.txt"), "x").unwrap();
+        let snap = Reader::default().read(&home, now);
+        // The file changed two days ago has the newer reading; only the recent one is listed.
+        assert_eq!(
+            (snap.limits.and_then(|l| l.five_hour).map(|l| l.used), snap.plan.as_deref()),
+            (Some(20.0), Some("Plus"))
+        );
+        assert_eq!(snap.sessions.len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn looks_only_while_on() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn(move |s| drop(tx.send(s)), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), Snapshot::default());
+    }
 }

@@ -931,6 +931,97 @@ mod tests {
     }
 
     #[test]
+    fn reads_more_kinds_of_background_work() {
+        let t0 = 1_794_406_200;
+        let mut p = Parser::default();
+        // Without a description: the command; the result as text parts.
+        p.line(&tool("t1", "PowerShell", r#"{"command":"Start-Sleep 99","run_in_background":true}"#));
+        p.line(r#"{"type":"user","message":{"content":[{"tool_use_id":"t1","type":"tool_result","content":[{"type":"text","text":"Command running in background with ID: b7."}]}]}}"#);
+        // Monitors that say how long they run, in hours and in seconds.
+        p.line(&tool("t2", "Monitor", r#"{"command":"tail -f a"}"#));
+        p.line(&result("t2", "Monitor started (task b8, expires in 2h)", false));
+        p.line(&tool("t3", "Monitor", r#"{"command":"tail -f b"}"#));
+        p.line(&result("t3", "Monitor started (task b9, expires in 45s)", false));
+        // A result of something else: nothing for the background work.
+        p.line(&result("t9", "ok", false));
+        // The same call written again isn't started twice.
+        p.line(&tool("t3", "Monitor", r#"{"command":"tail -f b"}"#));
+        let w = p.stats().watchers;
+        assert_eq!(w.len(), 3);
+        assert_eq!((w[0].label.as_str(), w[1].until, w[2].until), ("Start-Sleep 99", Some(t0 + 7200), Some(t0 + 45)));
+        // Stopped by its shell id, and a stop of something unknown.
+        p.line(&tool("t4", "KillShell", r#"{"shell_id":"b7"}"#));
+        p.line(&tool("t5", "TaskStop", r#"{"task_id":"nothing"}"#));
+        assert_eq!(p.stats().watchers.len(), 2);
+        // A wake-up without its delay: none.
+        p.line(&tool("t6", "ScheduleWakeup", r#"{"reason":"later"}"#));
+        assert_eq!(p.stats().watchers.len(), 2);
+        // An agent call without an id isn't waited for.
+        p.line(&assistant("m9", 1, (1, 0, 0), r#"{"type":"tool_use","name":"Agent"}"#));
+        assert!(p.stats().agent_calls.is_empty());
+        assert_eq!((ttl_secs("30s"), ttl_secs("5d")), (Some(30), None));
+    }
+
+    #[test]
+    fn a_cache_lifetime_from_what_was_written() {
+        let with = |created: &str| {
+            let mut p = Parser::default();
+            let line = assistant("m1", 1, (1, 0, 0), "")
+                .replace("{\"type\":\"assistant\",", "{\"type\":\"assistant\",\"timestamp\":\"2026-11-11T14:10:00Z\",")
+                .replace("\"output_tokens\":1", &format!("\"output_tokens\":1,\"cache_creation\":{created}"));
+            p.line(&line);
+            p.stats().cache_expires_at.map(|t| t - 1_794_406_200)
+        };
+        assert_eq!(with(r#"{"ephemeral_1h_input_tokens":5}"#), Some(3600));
+        assert_eq!(with(r#"{"ephemeral_5m_input_tokens":5}"#), Some(300));
+        assert_eq!(with(r#"{"ephemeral_1h_input_tokens":0}"#), Some(300));
+    }
+
+    #[test]
+    fn finds_a_transcript_of_a_moved_project() {
+        let dir = std::env::temp_dir().join(format!("trayward-transcripts-moved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let old = dir.join("projects").join("C--old");
+        let new = dir.join("projects").join("C--new");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let touch = |path: &Path, at: u64| {
+            let time = std::time::UNIX_EPOCH + Duration::from_secs(at);
+            std::fs::File::options().write(true).open(path).unwrap().set_modified(time).unwrap();
+        };
+        std::fs::write(old.join("abc.jsonl"), assistant("m1", 10, (1, 0, 0), "") + "\n").unwrap();
+        std::fs::write(new.join("abc.jsonl"), assistant("m2", 20, (1, 0, 0), "") + "\n").unwrap();
+        touch(&old.join("abc.jsonl"), 1_700_000_000);
+        touch(&new.join("abc.jsonl"), 1_800_000_000);
+        // The folder it says isn't there: the newest copy.
+        assert_eq!(find(&dir, "abc", "C:\\elsewhere"), Some(new.join("abc.jsonl")));
+        assert_eq!(find(&dir, "nope", "C:\\elsewhere"), None);
+        assert_eq!(find(&dir.join("missing"), "abc", "C:\\old"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_transcript_written_anew_is_read_from_its_start() {
+        let dir = std::env::temp_dir().join(format!("trayward-transcripts-anew-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let projects = dir.join("projects").join("C--p");
+        std::fs::create_dir_all(&projects).unwrap();
+        let file = projects.join("abc.jsonl");
+        let two = format!("{}\n{}\n", assistant("m1", 10, (1, 0, 0), ""), assistant("m2", 20, (1, 0, 0), ""));
+        std::fs::write(&file, two).unwrap();
+        let mut s = Scanner::default();
+        let sessions = vec![("abc".to_string(), "C:/p".to_string(), dir.clone())];
+        assert_eq!(s.scan(&sessions)[0].1.output_tokens, 30);
+        std::fs::write(&file, assistant("m3", 5, (1, 0, 0), "") + "\n").unwrap();
+        assert_eq!(s.scan(&sessions)[0].1.output_tokens, 5);
+        // Deleted: looked for again; what was read stays.
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(s.scan(&sessions)[0].1.output_tokens, 5);
+        assert!(s.scan(&sessions).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn project_folder_names() {
         assert_eq!(project_folder("c:\\dev\\tools\\my-app"), "c--dev-tools-my-app");
         assert_eq!(project_folder("C:\\a b\\ü"), "C--a-b--");

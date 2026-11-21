@@ -196,6 +196,34 @@ mod tests {
     }
 
     #[test]
+    fn lists_the_sessions_that_run() {
+        let config = std::env::temp_dir().join(format!("trayward-registry-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&config);
+        let sessions = config.join("sessions");
+        let source = Source { distro: None, config_dir: config.clone() };
+        // No folder: nothing could be read.
+        assert_eq!(list(&source), None);
+        std::fs::create_dir_all(&sessions).unwrap();
+        let entry = |pid: u32, id: &str| {
+            json!({"pid": pid, "sessionId": id, "cwd": "C:\\work\\shop", "kind": "interactive", "status": "busy"})
+                .to_string()
+        };
+        // This process runs; a pid past any there can be doesn't.
+        std::fs::write(sessions.join("1.json"), entry(std::process::id(), "running")).unwrap();
+        std::fs::write(sessions.join("2.JSON"), entry(u32::MAX - 1, "ended")).unwrap();
+        // Not JSON, not a session list entry, not a .json file.
+        std::fs::write(sessions.join("3.json"), "{ cut off").unwrap();
+        std::fs::write(sessions.join("4.json"), "[1, 2]").unwrap();
+        std::fs::write(sessions.join("notes.txt"), entry(std::process::id(), "text")).unwrap();
+        let listed = list(&source).unwrap();
+        assert_eq!(listed.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), ["running"]);
+        assert_eq!((listed[0].state, listed[0].distro.as_deref()), (ListedState::Busy, None));
+        // A distribution that isn't running has no folder to read.
+        assert_eq!(list(&Source::kept_only("Ubuntu")), None);
+        let _ = std::fs::remove_dir_all(&config);
+    }
+
+    #[test]
     fn builds_wsl_paths() {
         assert_eq!(
             wsl_path("Ubuntu", "/home/user/.claude"),

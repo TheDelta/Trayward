@@ -190,3 +190,76 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
         find(&mut std::env::split_paths(&now).filter(|dir| !started.contains(dir)))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::time::{Duration, Instant};
+
+    /// The Cargo that builds the tests: a harmless program that is surely there.
+    fn cargo() -> &'static OsStr {
+        OsStr::new(env!("CARGO"))
+    }
+
+    #[test]
+    fn runs_a_program_and_reads_what_it_wrote() {
+        let out = run(cargo(), &["--version"], Duration::from_secs(60)).unwrap();
+        assert!(out.success && out.complete, "{}", out.stderr_text());
+        assert!(out.stdout_text().starts_with("cargo "));
+        // Failing: its exit code and what it said.
+        let out = run(cargo(), &["--no-such-option-anywhere"], Duration::from_secs(60)).unwrap();
+        assert!(!out.success && out.complete);
+        assert!(!out.stderr_text().is_empty());
+        // Not there: why, with its name.
+        let err = run(OsStr::new("no-such-program-anywhere"), &[], Duration::from_secs(5)).err().unwrap();
+        assert!(err.starts_with("no-such-program-anywhere: "), "{err}");
+    }
+
+    /// A program that prints an environment variable, and one that takes a while.
+    #[cfg(windows)]
+    fn shell(print: &str) -> (PathBuf, Vec<String>) {
+        (system_program("cmd.exe").unwrap(), vec!["/C".into(), format!("echo %{print}%")])
+    }
+    #[cfg(not(windows))]
+    fn shell(print: &str) -> (PathBuf, Vec<String>) {
+        (PathBuf::from("/bin/sh"), vec!["-c".into(), format!("echo ${print}")])
+    }
+    #[cfg(windows)]
+    fn slow() -> (PathBuf, Vec<&'static str>) {
+        // Pings this PC itself, once a second: nothing leaves it.
+        (system_program("ping.exe").unwrap(), vec!["-n", "30", "127.0.0.1"])
+    }
+    #[cfg(not(windows))]
+    fn slow() -> (PathBuf, Vec<&'static str>) {
+        (PathBuf::from("/bin/sleep"), vec!["30"])
+    }
+
+    #[test]
+    fn hands_over_environment_variables() {
+        let (program, args) = shell("TRAYWARD_TEST_VALUE");
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let env = [("TRAYWARD_TEST_VALUE", "made-up-value")];
+        let out = run_env(program.as_os_str(), &args, &env, Duration::from_secs(30)).unwrap();
+        assert_eq!(out.stdout_text().trim(), "made-up-value");
+    }
+
+    #[test]
+    fn stops_a_program_that_takes_too_long() {
+        let (program, args) = slow();
+        let started = Instant::now();
+        let out = run(program.as_os_str(), &args, Duration::from_millis(300)).unwrap();
+        assert!(!out.success && !out.complete);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn finds_programs_by_their_whole_path() {
+        assert!(find_program("no-such-program-anywhere").is_none());
+        assert!(find_program("cargo").is_none_or(|p| p.is_absolute() && p.is_file()));
+        assert!(system_program("no-such-program-anywhere.exe").is_none());
+        #[cfg(windows)]
+        assert!(system_program("cmd.exe").is_some_and(|p| p.is_absolute()));
+        assert!(now_ms() > 1_700_000_000_000);
+    }
+}

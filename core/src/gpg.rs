@@ -381,6 +381,60 @@ mod tests {
         assert_eq!(last_signed_in(""), None);
     }
 
+    #[test]
+    fn finds_the_last_signature_of_a_repository() {
+        let base = std::env::temp_dir().join(format!("trayward-gpg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let line = |time: i64, msg: &str| format!("aaa bbb Alex <a@example.com> {time} +0100\t{msg}\n");
+        // A long reflog: only its end is read, from inside some line.
+        let repo = base.join("repo");
+        let logs = repo.join(".git").join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let mut log = line(100, "commit: first").repeat(1_000);
+        log += &line(900, "commit: last");
+        assert!(log.len() as u64 > REFLOG_TAIL);
+        std::fs::write(logs.join("HEAD"), &log).unwrap();
+        std::fs::create_dir_all(repo.join("src").join("deep")).unwrap();
+        assert_eq!(last_commit(&repo.join("src").join("deep")), Some(900));
+        // A worktree: its `.git` file points at its own folder, relative to it.
+        let wt = base.join("wt");
+        let wt_git = repo.join(".git").join("worktrees").join("wt");
+        std::fs::create_dir_all(wt_git.join("logs")).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: ../repo/.git/worktrees/wt\n").unwrap();
+        std::fs::write(wt_git.join("logs").join("HEAD"), line(700, "commit (amend): x")).unwrap();
+        assert_eq!(last_commit(&wt), Some(700));
+        // A `.git` file that isn't one, and a repository without a reflog.
+        let odd = base.join("odd");
+        std::fs::create_dir_all(&odd).unwrap();
+        std::fs::write(odd.join(".git"), "something else").unwrap();
+        assert_eq!(last_commit(&odd), None);
+        let fresh = base.join("fresh");
+        std::fs::create_dir_all(fresh.join(".git")).unwrap();
+        assert_eq!(last_commit(&fresh), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn finds_the_gpg_tools_where_git_says() {
+        let dir = std::env::temp_dir().join(format!("trayward-gpg-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Without its tools the folder isn't GnuPG's.
+        assert_ne!(bin_of(Some(dir.clone())), Some(dir.clone()));
+        std::fs::write(dir.join("gpg-connect-agent.exe"), b"").unwrap();
+        assert_eq!(bin_of(Some(dir.clone())), Some(dir.clone()));
+        // Looked up only: whatever is installed, it's told without running anything.
+        assert!(matches!(found(), Check::Found { .. }));
+        // A tool that can't be started tells nothing: the agent of a setup without one.
+        let setup = Setup { bin: dir.clone(), grip: "65015B".into(), default_ttl: 600, max_ttl: 7200 };
+        assert_eq!(agent(&setup), None);
+        assert_eq!(run(&dir.join("gpg.exe"), &["--version"]), None);
+        // One that runs: its output (Cargo, as harmless as it gets).
+        assert!(run(Path::new(env!("CARGO")), &["--version"]).is_some_and(|v| v.starts_with("cargo ")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The real setup on this PC: the agent, the key's state and this repository's last signed commit.
     #[test]
     #[ignore = "needs GnuPG and git set up to sign"]

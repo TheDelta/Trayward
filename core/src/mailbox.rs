@@ -358,5 +358,69 @@ mod tests {
         assert_eq!(m.from.as_deref(), Some("api"));
         assert_eq!(Some(m.at), crate::timefmt::parse_rfc3339("2026-11-14T08:00:00Z"));
         let _ = std::fs::remove_file(&path);
+        // Gone before it was read: nothing known of it but its name.
+        let m = read_message(&path);
+        assert_eq!((m.from, m.at, m.reply), (None, 0, false));
+    }
+
+    #[test]
+    fn groups_unread_messages_by_sender() {
+        let m = |from: Option<&str>, at: i64| Message {
+            path: PathBuf::from(format!("{at}.md")),
+            from: from.map(str::to_string),
+            topic: String::new(),
+            at,
+            reply: false,
+        };
+        let inbox = Inbox {
+            name: "shop".into(),
+            path: PathBuf::from("shop"),
+            unread: vec![m(Some("api"), 1), m(None, 2), m(Some("api"), 3), m(Some("ops"), 4)],
+            unread_count: 4,
+            done: 0,
+            last_done: None,
+        };
+        let groups = inbox.by_sender();
+        let summary: Vec<(&str, Vec<i64>)> =
+            groups.iter().map(|(f, l)| (f.as_str(), l.iter().map(|m| m.at).collect())).collect();
+        // The sender with the most first, each one's newest first; no sender: "?".
+        assert_eq!(summary, [("api", vec![3, 1]), ("?", vec![2]), ("ops", vec![4])]);
+    }
+
+    #[test]
+    fn reads_the_mailbox_while_on() {
+        let base = std::env::temp_dir().join(format!("trayward-mailbox-spawn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let found = base.join(FOLDER);
+        let set = base.join("set");
+        std::fs::create_dir_all(found.join("shop")).unwrap();
+        std::fs::create_dir_all(set.join("api")).unwrap();
+        std::fs::write(found.join("shop").join("20261114T0900Z-ops-dns.md"), "From: ops\n").unwrap();
+        // Found above a session's folder.
+        let hints = vec![base.join("p").join("a").display().to_string()];
+        let (on, poke) = (Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
+        let configured = Arc::new(Mutex::new(None));
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn(
+            move |s| drop(tx.send(s)),
+            on.clone(),
+            poke.clone(),
+            configured.clone(),
+            Arc::new(Mutex::new(hints)),
+            None,
+        );
+        let wait = || rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let first = wait();
+        assert_eq!((first.root.as_deref(), first.unread()), (Some(found.as_path()), 1));
+        // Another folder set in the settings: asked to look again right away.
+        *configured.lock().unwrap() = Some(set.display().to_string());
+        poke.store(true, Ordering::Relaxed);
+        let second = wait();
+        assert_eq!((second.root.as_deref(), second.inboxes.len()), (Some(set.as_path()), 1));
+        // Off: nothing.
+        on.store(false, Ordering::Relaxed);
+        poke.store(true, Ordering::Relaxed);
+        assert_eq!(wait(), Snapshot::default());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

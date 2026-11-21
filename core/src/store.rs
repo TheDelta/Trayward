@@ -220,4 +220,65 @@ mod tests {
         assert_eq!(saved.history.len(), 1);
         assert_eq!(parse(b"cut off {").map(|(_, w)| w), None);
     }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("trayward-store-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        use_dir(&dir);
+        dir
+    }
+
+    #[test]
+    fn nothing_is_read_or_written_without_a_folder() {
+        // A test thread that set no folder of its own never reaches the real state.
+        assert!(path().is_none());
+        assert!(load().plan.is_none());
+        save(&Saved { plan: Some("Max".into()), ..Default::default() });
+    }
+
+    #[test]
+    fn saves_and_loads_the_state() {
+        let dir = test_dir("saves");
+        assert!(load().history.is_empty());
+        let w = Writer::spawn();
+        // Saves close together become one: the newest.
+        w.save(Saved { plan: Some("Pro".into()), ..Default::default() });
+        w.save(Saved { plan: Some("Max".into()), pinned: Some("abc".into()), ..Default::default() });
+        w.flush();
+        let saved = load();
+        assert_eq!((saved.plan.as_deref(), saved.pinned.as_deref()), (Some("Max"), Some("abc")));
+        assert!(!dir.join("state.json.tmp").exists());
+        // A flush with nothing waiting answers too.
+        w.flush();
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sets_a_damaged_state_aside() {
+        let dir = test_dir("damaged");
+        let file = dir.join("state.json");
+        std::fs::write(&file, br#"{"plan":"Max","sessions":{"list":[{"id":7}]}}"#).unwrap();
+        let saved = load();
+        assert_eq!(saved.plan.as_deref(), Some("Max"));
+        assert!(!file.exists() && dir.join("state.bad.json").is_file());
+        // Not JSON at all: nothing of it, and set aside too.
+        std::fs::write(&file, b"cut off {").unwrap();
+        assert!(load().plan.is_none());
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_that_fails_leaves_nothing_behind() {
+        let dir = test_dir("fails");
+        // The state's folder is a file: nothing can be written into it.
+        let blocked = dir.join("blocked");
+        std::fs::write(&blocked, b"").unwrap();
+        use_dir(&blocked);
+        save(&Saved::default());
+        assert!(std::fs::read(&blocked).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
