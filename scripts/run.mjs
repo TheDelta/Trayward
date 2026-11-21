@@ -12,7 +12,7 @@ import { root } from "./tools.mjs";
 
 const release = join(root, "target", "release", "trayward.exe");
 // Windows' own programs by their full path, not whatever of that name PATH finds first
-const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+const system32 = join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32");
 const powershell = join(system32, "WindowsPowerShell", "v1.0", "powershell.exe");
 const taskkill = join(system32, "taskkill.exe");
 const debug = join(root, "target", "debug", "trayward.exe");

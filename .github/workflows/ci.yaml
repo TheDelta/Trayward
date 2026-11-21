@@ -42,7 +42,9 @@ jobs:
       - name: Install the tools (package-lock.json, requirements-dev.txt)
         run: |
           npm ci --ignore-scripts
-          python -m pip install --require-hashes -r requirements-dev.txt
+          # Wheels only (no package's setup script runs), but for actionlint-py, a source
+          # package that downloads the actionlint binary (docs/maintenance.md)
+          python -m pip install --require-hashes --only-binary :all: --no-binary actionlint-py -r requirements-dev.txt
 
       # Everything but Rust (the next job, on Windows); with the release scripts' tests
       - name: npm run check

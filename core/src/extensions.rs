@@ -331,55 +331,76 @@ fn read_limited(path: &Path) -> Result<String, String> {
 pub fn spawn(send: impl Fn(Snapshot) + Send + 'static, on: Arc<AtomicBool>, poke: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         crate::os::background_thread();
-        let mut known = HashMap::new();
-        let mut watch: Option<DirWatch> = None;
-        let mut last: Option<Snapshot> = None;
-        let mut since = Duration::MAX;
-        let mut changed = false;
+        let mut reader = Reader::default();
         loop {
             let asked = poke.swap(false, Ordering::Relaxed);
-            let snap = match dir().filter(|_| on.load(Ordering::Relaxed)) {
-                Some(dir) => {
-                    if watch.is_none() {
-                        let _ = std::fs::create_dir_all(&dir);
-                        watch = DirWatch::new(&dir);
-                    }
-                    let every = if watch.is_some() { EVERY } else { EVERY_UNWATCHED };
-                    if changed {
-                        // More changes while the writer finishes: one read after them.
-                        std::thread::sleep(SETTLE);
-                        while watch.as_ref().is_some_and(|w| w.wait(SETTLE)) {}
-                    }
-                    if asked || changed || since >= every || last.is_none() {
-                        since = Duration::ZERO;
-                        read(&dir, &mut known)
-                    } else {
-                        last.clone().unwrap_or_default()
-                    }
-                }
-                None => {
-                    watch = None;
-                    known.clear();
-                    since = Duration::MAX;
-                    Snapshot::default()
-                }
-            };
-            if asked || last.as_ref() != Some(&snap) {
-                last = Some(snap.clone());
+            let snap = reader.snapshot(dir().filter(|_| on.load(Ordering::Relaxed)), asked);
+            if asked || reader.last.as_ref() != Some(&snap) {
+                reader.last = Some(snap.clone());
                 send(snap);
             }
-            // Until a change, the next look, or until asked.
-            let step = Duration::from_millis(250);
-            changed = match &watch {
-                Some(w) => w.wait(step),
-                None => {
-                    std::thread::sleep(step);
-                    false
-                }
-            };
-            since = since.saturating_add(step);
+            reader.wait();
         }
     });
+}
+
+/// What the reading thread keeps between looks.
+struct Reader {
+    known: HashMap<PathBuf, Known>,
+    watch: Option<DirWatch>,
+    last: Option<Snapshot>,
+    /// Since the last read.
+    since: Duration,
+    /// The folder changed while waiting.
+    changed: bool,
+}
+
+impl Default for Reader {
+    fn default() -> Self {
+        Reader { known: HashMap::new(), watch: None, last: None, since: Duration::MAX, changed: false }
+    }
+}
+
+impl Reader {
+    /// The folder `dir` now (none: switched off), read again when it changed, when
+    /// `asked`, or once its time is up.
+    fn snapshot(&mut self, dir: Option<PathBuf>, asked: bool) -> Snapshot {
+        let Some(dir) = dir else {
+            self.watch = None;
+            self.known.clear();
+            self.since = Duration::MAX;
+            return Snapshot::default();
+        };
+        if self.watch.is_none() {
+            let _ = std::fs::create_dir_all(&dir);
+            self.watch = DirWatch::new(&dir);
+        }
+        let every = if self.watch.is_some() { EVERY } else { EVERY_UNWATCHED };
+        if self.changed {
+            // More changes while the writer finishes: one read after them.
+            std::thread::sleep(SETTLE);
+            while self.watch.as_ref().is_some_and(|w| w.wait(SETTLE)) {}
+        }
+        if asked || self.changed || self.since >= every || self.last.is_none() {
+            self.since = Duration::ZERO;
+            read(&dir, &mut self.known)
+        } else {
+            self.last.clone().unwrap_or_default()
+        }
+    }
+
+    /// Until a change, the next look, or until asked.
+    fn wait(&mut self) {
+        let step = Duration::from_millis(250);
+        self.changed = match &self.watch {
+            Some(w) => w.wait(step),
+            None => {
+                std::thread::sleep(step);
+                false
+            }
+        };
+        self.since = self.since.saturating_add(step);
+    }
 }
 
 #[rustfmt::skip]

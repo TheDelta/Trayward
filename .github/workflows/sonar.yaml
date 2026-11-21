@@ -110,8 +110,10 @@ jobs:
         with:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-          pattern: coverage-*
-          path: ${{ runner.temp }}/ci
+          # By name, into its own folder (a pattern that matches one artifact unpacks it
+          # straight into path, without the folder)
+          name: coverage-rust
+          path: ${{ runner.temp }}/ci/coverage-rust
 
       # Only the report file, into the place sonar-project.properties names. Whatever
       # the pull request has at that place goes first: a link there would be written

@@ -38,7 +38,9 @@ const nextRun = new Date(started.getTime() + 25 * 60 * 1000);
 function extension(n) {
   const done = (n * 3) % 103;
   const copied = Math.round((done / 100) * 640);
-  const state = done >= 100 ? "ok" : done >= 80 ? "warn" : undefined;
+  let state;
+  if (done >= 100) state = "ok";
+  else if (done >= 80) state = "warn";
   return {
     version: 1,
     id: "example",

@@ -855,8 +855,9 @@ mod tests {
 
     #[test]
     fn takes_only_a_token_from_the_clipboard() {
-        assert!(looks_like_token("glpat-AbCdEfGhIjKlMnOpQrSt"));
-        assert!(looks_like_token("github_pat_11AAAAAAA0Example_Example0123456789"));
+        // Made-up tokens, put together here so no secret scanner takes them for real ones.
+        assert!(looks_like_token(&format!("glpat-{}", "Fake".repeat(5))));
+        assert!(looks_like_token(&format!("github_pat_{}", "Example0".repeat(5))));
         assert!(!looks_like_token("too-short"));
         assert!(!looks_like_token("a sentence that was on the clipboard"));
         assert!(!looks_like_token("https://gitlab.example.com/-/user_settings"));

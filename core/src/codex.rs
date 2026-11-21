@@ -162,40 +162,46 @@ impl Reader {
 /// Session files changed since `since`: path, length and modification time.
 /// `look` names the day folders to look into whatever their own age.
 fn recent_files(sessions: &Path, since: i64, look: impl Fn(&Path) -> bool) -> Vec<(PathBuf, u64, i64)> {
-    let mtime = |m: &std::fs::Metadata| {
-        m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64)
-    };
-    let dirs = |p: &Path| -> Vec<PathBuf> {
-        std::fs::read_dir(p)
-            .map(|r| r.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path()).collect())
-            .unwrap_or_default()
-    };
     let mut out = Vec::new();
     // YYYY/MM/DD: a day's folder changes when a file is added to it, not when one
     // in it grows. Older days are skipped without looking at their files, except
     // the ones `look` names.
-    for year in dirs(sessions) {
-        for month in dirs(&year) {
-            for day in dirs(&month) {
+    for year in subfolders(sessions) {
+        for month in subfolders(&year) {
+            for day in subfolders(&month) {
                 let Ok(meta) = std::fs::metadata(&day) else { continue };
-                if mtime(&meta) < since - 86_400 && !look(&day) {
-                    continue;
-                }
-                for e in std::fs::read_dir(&day).into_iter().flatten().flatten() {
-                    let path = e.path();
-                    if path.extension().is_none_or(|x| x != "jsonl") {
-                        continue;
-                    }
-                    if let Ok(m) = e.metadata() {
-                        if mtime(&m) >= since {
-                            out.push((path, m.len(), mtime(&m)));
-                        }
-                    }
+                if mtime(&meta) >= since - 86_400 || look(&day) {
+                    day_files(&day, since, &mut out);
                 }
             }
         }
     }
     out
+}
+
+/// When a file or folder last changed, as unix seconds (0 if unknown).
+fn mtime(m: &std::fs::Metadata) -> i64 {
+    m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64)
+}
+
+/// The folders in `p`.
+fn subfolders(p: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(p)
+        .map(|r| r.flatten().filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+/// A day folder's session files changed since `since`, added to `out`.
+fn day_files(day: &Path, since: i64, out: &mut Vec<(PathBuf, u64, i64)>) {
+    for e in std::fs::read_dir(day).into_iter().flatten().flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "jsonl") {
+            continue;
+        }
+        if let Some(m) = e.metadata().ok().filter(|m| mtime(m) >= since) {
+            out.push((path, m.len(), mtime(&m)));
+        }
+    }
 }
 
 fn parse_file(path: &Path, len: u64) -> Parsed {
