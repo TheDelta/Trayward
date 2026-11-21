@@ -165,12 +165,13 @@ settings. How to use them: [CONTRIBUTING.md](../CONTRIBUTING.md) and
     from the release bot, Dependabot and contributors need the maintainer's approval
     (a leaked bot key can't merge anything).
   - Code scanning (CodeQL, public repository only) and release tags, in two rulesets:
-    `v*` can't move or be deleted, for anyone; and only the Release workflow (GitHub
-    Actions' own token) and the maintainer may create one. A tag is what gets built and
-    published, and whoever can make one can also publish a release of their own: so no
-    other key with write access may, the release bot's included (it only opens the
-    release pull request, and its key lives only in the `release` environment, limited
-    to `main`). Pushing a tag by hand stays the maintainer's way in. CodeQL runs as
+    `v*` can't move or be deleted, for anyone. Who may create one isn't restricted:
+    GitHub accepts its Actions integration as a ruleset's bypass only in an
+    organisation's repository, and without it the Release workflow couldn't tag. A tag
+    is what gets built and published, so the keys that could make one are kept few: the
+    release bot only opens the release pull request, and its key lives only in the
+    `release` environment, limited to `main`; releases are immutable once published.
+    Pushing a tag by hand stays the maintainer's way in. CodeQL runs as
     GitHub's default setup (no workflow file): Rust (generally available since October
     2025, analysed without a build), Python, JavaScript and the workflows.
 - **Repository settings** (Settings → General): squash merging only, its default
