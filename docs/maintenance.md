@@ -260,32 +260,27 @@ false` on every checkout that doesn't push; top-level `permissions` minimal,
   staged files, fixes restaged, one tool at a time; `cargo fmt` for Rust), commit-msg
   runs commitlint and spell-checks the first line, pre-push runs Clippy and the
   tests. CI sets `HUSKY=0`.
-- **SonarQube Cloud**, analyzed in CI (`sonar.yaml`, `sonar-project.properties`) for
-  the coverage: automatic analysis can't read coverage reports. CI's Rust (newest) job
-  uploads `coverage-rust` (`cargo llvm-cov --lcov`). `sonar.yaml` runs on
-  `workflow_run` after CI, so forks' pull requests are analyzed with the token their
-  own runs don't get; safe because nothing of the pull request runs and nothing of it
-  configures the scanner: the scanner only reads the checkout
-  (`allow-unsafe-pr-checkout`, zizmor's dangerous-triggers ignored with that reason),
-  its settings are `main`'s `sonar-project.properties` (`-Dproject.settings`, copied
-  out of the checkout; a pull request's copy could set another `sonar.host.url` and
-  receive the token, or a program for the scanner to run) with the host fixed on the
-  command line, the pull request number comes from the API by the commit (not from
-  the run's data), and only the report file is copied out of the artifacts, to a place
-  in the checkout that is cleared first (a link the pull request put there would be
-  written through, onto those settings).
-  Clippy isn't run by the scanner (it's on Linux; CI runs Clippy on Windows), which the
-  command line says too: it would run cargo, and with it the pull request's build script.
+- **SonarQube Cloud**, analyzed in CI (the "SonarQube Cloud" job of `ci.yaml`,
+  `sonar-project.properties`) for the coverage: automatic analysis can't read coverage
+  reports. The Rust (newest) job uploads `coverage-rust` (`cargo llvm-cov --lcov`, paths
+  made relative to the repository); the SonarQube job takes it from the same run and
+  makes its paths absolute for the scanner on Linux (relative ones it resolves from each
+  Cargo package's folder, which loses the core crate). It runs for `main` and for pull
+  requests from this repository only: a fork's pull request gets no secrets in its run,
+  and is analyzed once merged. (It used to run on `workflow_run` to analyze forks too,
+  checking out their code next to the token; Scorecard and CodeQL rightly flag that
+  pattern, whatever the scanner does with the code.) Clippy isn't run by the scanner (it's
+  on Linux; CI runs Clippy on Windows).
   Organization and project key are repository variables (`SONAR_ORGANIZATION`,
   `SONAR_PROJECT_KEY`). `main`'s analyses pass `sonar.projectVersion` (read from
   `Cargo.toml` with `sed`, no repository code runs), so with New Code = "Previous
   version" SonarQube shows what each release adds and marks releases in its Activity
-  graph. Only `src`, `core/src`, `build.rs` and `scripts` are analyzed (the workflows are
-  zizmor's and actionlint's). Findings that stay are listed in `sonar-project.properties`
+  graph. The whole repository is analyzed (SonarQube Cloud ignores `sonar.sources` now), but for
+  the release scripts' tests (`sonar.exclusions`). Findings that stay are listed in `sonar-project.properties`
   with their reasons (`sonar.issue.ignore.multicriteria`), not clicked away on the website:
   the release scripts taking file names from their command line, the dev scripts
-  starting tools from PATH, and the complexity limit (30) in the five files that draw the
+  starting tools from PATH, and the complexity limit (30) in the six files that draw the
   windows and handle their events (`app.rs`, `flyout.rs`, `settings_window.rs`,
-  `stats_window.rs`, `widget.rs`), where one function per window is the design. Everywhere
+  `stats_window.rs`, `widget.rs`, `tip.rs`), where one function per window is the design. Everywhere
   else the limit holds: a function over it is split. Clippy's `redundant_closure_for_method_calls` is on because
   Sonar asks for the same.

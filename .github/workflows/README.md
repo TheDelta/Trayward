@@ -16,9 +16,9 @@ flowchart LR
 ```
 
 1. **Pull request:** `CI` and `Pull request` run. Every job they run must pass
-   before you can merge. These are the required checks on `main`. When CI is done,
-   `SonarQube Cloud` analyses the code with CI's coverage and reports on the pull
-   request.
+   before you can merge. These are the required checks on `main`. CI's last job,
+   `SonarQube Cloud`, analyses the code with the Rust job's coverage and reports on the
+   pull request (not on a fork's: its run gets no secrets).
 2. **Merge to `main`:** `CI` runs again on the merged state, and so does `Scorecard`.
    `Release` starts too, but it only checks whether the commit is a release and stops
    if it isn't. (Not after a Dependabot auto-merge: GitHub starts no workflows for a
@@ -31,17 +31,16 @@ flowchart LR
 
 ## At a glance
 
-| Workflow                | File                                                     | Runs                                       | Purpose                                                                                                                           |
-| ----------------------- | -------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| CI                      | [ci.yaml](ci.yaml)                                       | pull requests, push to `main`, by hand     | Lint and checks; Rust lint, docs, tests and build on Windows (oldest and newest Rust); the core on Linux; the crates (cargo-deny) |
-| Pull request            | [pull-request.yaml](pull-request.yaml)                   | pull requests (title, new pushes)          | Conventional Commits title (it becomes the changelog line); complete release notes                                                |
-| Pull request title help | [pr-title-help.yaml](pr-title-help.yaml)                 | pull requests (opened, title edited)       | A comment that explains a bad title and how to fix it                                                                             |
-| SonarQube Cloud         | [sonar.yaml](sonar.yaml)                                 | after every CI run (pull requests, `main`) | Code analysis with the tests' coverage; coverage of new code on pull requests                                                     |
-| Dependabot auto-merge   | [dependabot-auto-merge.yaml](dependabot-auto-merge.yaml) | Dependabot's pull requests                 | Auto-merge for safe updates (dev tools and actions, patch and minor) once approved and green                                      |
-| Prepare release         | [prepare-release.yaml](prepare-release.yaml)             | by hand                                    | Version bump on a `release/vX.Y.Z` branch, opens the release pull request                                                         |
-| Release                 | [release.yaml](release.yaml)                             | push to `main`, a `v*.*.*` tag             | `trayward.exe`, tag, GitHub release (only for a release commit)                                                                   |
-| Scorecard               | [scorecard.yaml](scorecard.yaml)                         | push to `main`, weekly, by hand            | OpenSSF security rating, README badge (public repository only)                                                                    |
-| Links                   | [links.yaml](links.yaml)                                 | weekly, by hand                            | Broken links in the Markdown files (public repository only)                                                                       |
+| Workflow                | File                                                     | Runs                                   | Purpose                                                                                                                           |
+| ----------------------- | -------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| CI                      | [ci.yaml](ci.yaml)                                       | pull requests, push to `main`, by hand | Lint and checks; Rust lint, docs, tests and build on Windows (oldest and newest Rust); the core on Linux; the crates (cargo-deny) |
+| Pull request            | [pull-request.yaml](pull-request.yaml)                   | pull requests (title, new pushes)      | Conventional Commits title (it becomes the changelog line); complete release notes                                                |
+| Pull request title help | [pr-title-help.yaml](pr-title-help.yaml)                 | pull requests (opened, title edited)   | A comment that explains a bad title and how to fix it                                                                             |
+| Dependabot auto-merge   | [dependabot-auto-merge.yaml](dependabot-auto-merge.yaml) | Dependabot's pull requests             | Auto-merge for safe updates (dev tools and actions, patch and minor) once approved and green                                      |
+| Prepare release         | [prepare-release.yaml](prepare-release.yaml)             | by hand                                | Version bump on a `release/vX.Y.Z` branch, opens the release pull request                                                         |
+| Release                 | [release.yaml](release.yaml)                             | push to `main`, a `v*.*.*` tag         | `trayward.exe`, tag, GitHub release (only for a release commit)                                                                   |
+| Scorecard               | [scorecard.yaml](scorecard.yaml)                         | push to `main`, weekly, by hand        | OpenSSF security rating, README badge (public repository only)                                                                    |
+| Links                   | [links.yaml](links.yaml)                                 | weekly, by hand                        | Broken links in the Markdown files (public repository only)                                                                       |
 
 ## CI
 
@@ -152,19 +151,18 @@ why.
 
 ## SonarQube Cloud
 
-Runs after every CI run of a pull request or of `main` (`workflow_run`), so pull
-requests from forks are analyzed too: their own CI runs get no secrets. It takes the
-coverage report CI uploaded (`coverage-rust`), checks out the commit for the scanner
-to read (nothing from it runs, and the scanner's settings are `main`'s
-`sonar-project.properties`, never the pull request's) and sends the analysis to SonarQube Cloud, which
-comments on the pull request and adds its quality gate check: new issues, and how
-much of the new code the tests cover.
+The last job of CI (`ci.yaml`), for `main` and for pull requests from this repository.
+A fork's pull request isn't analyzed (its run gets no secrets); its code is, once
+merged. It takes the coverage report of the same run (`coverage-rust`) and sends the
+analysis to SonarQube Cloud, which comments on the pull request and adds its quality
+gate check: new issues, and how much of the new code the tests cover. Not a required
+check.
 
 - **Setup:** the secret `SONAR_TOKEN` (SonarQube Cloud → My Account → Security, best a
   project analysis token) and the variables `SONAR_ORGANIZATION` and
   `SONAR_PROJECT_KEY` (the project's Information page). Turn off **Automatic
   Analysis** in the project's Administration → Analysis Method: with both on, the
-  analysis fails. Without the token the workflow does nothing.
+  analysis fails. Without the token the job does nothing.
 - **Per release:** analyses of `main` carry the version (`sonar.projectVersion`, from
   `Cargo.toml`). With the project's **New Code** set to **Previous version**
   (Administration → New Code), `main`'s page shows the coverage and issues of
