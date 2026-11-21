@@ -804,7 +804,8 @@ impl Ui<'_> {
             c.text(&t, x + label_w + hr as f32 * (cell_w + gap), y + grid_h + 2.0, self.pal.text_dim);
         }
         if let Some((d, hr)) = cell {
-            let v = heat[d][hr];
+            // The grid is 7 × 24 by the core's making; anything else counts as nothing.
+            let v = heat.get(d).and_then(|row| row.get(hr)).copied().unwrap_or(0);
             let day = timefmt::weekday(A_MONDAY + d as i64 * DAY);
             let cx = x + label_w + hr as f32 * (cell_w + gap) + cell_w / 2.0;
             let what = match v {
