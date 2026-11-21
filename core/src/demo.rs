@@ -754,9 +754,6 @@ fn generate(base: &Path, now: i64, utc_offset: i64) -> PathBuf {
 /// When the demo started.
 static STARTED: OnceLock<std::time::Instant> = OnceLock::new();
 
-/// Made-up merge requests for the demo's projects (no GitLab or GitHub is
-/// asked): one pipeline running, one failed, one passed; the running one
-/// passes about a minute after the demo started.
 /// How the demo's GPG key timer setup stands: GnuPG there, and (switched on) the key unlocked.
 pub fn gpg_check(on: bool) -> crate::gpg::Check {
     use crate::gpg::Check;
@@ -787,6 +784,9 @@ pub fn tools(asked: bool) -> crate::forge::Tools {
     }
 }
 
+/// Made-up merge requests for the demo's projects (no GitLab or GitHub is
+/// asked): one pipeline running, one failed, one passed; the running one
+/// passes about a minute after the demo started.
 pub fn forge(folders: &[String]) -> crate::forge::Snapshot {
     use crate::forge::{Branch, Change, Checks, Forge, Snapshot, State};
     let passed_by_now = STARTED.get().is_some_and(|t| t.elapsed().as_secs() > 70);
