@@ -826,7 +826,8 @@ taskbar, wherever Windows puts it (the left end with centred icons, next to the 
 left-aligned ones). A widget narrower than the button takes all of it, its content centred and the
 button covered in the taskbar's colour (as with Solid background), so the weather doesn't show
 beside it and the whole button is the widget's to point at. When it's wider than the button, it leaves
-out the usage bars and then goes slim by itself; if it's still wider, it reaches from the button
+out the usage bars (even when they're always wanted), then the system monitor, and then goes slim
+by itself; if it's still wider, it reaches from the button
 towards the middle of the taskbar. Without a Widgets button (Widgets switched off in Windows'
 taskbar settings) it sits next to the tray, and the settings card says how to switch Widgets on.
 
