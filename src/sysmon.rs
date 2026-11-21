@@ -445,6 +445,16 @@ mod pdh {
 mod tests {
     use super::*;
 
+    /// Windows' table of network adapters reads, on any PC (CI's runner too).
+    #[test]
+    fn reads_the_network_table() {
+        let (down, up) = net_bytes().unwrap_or_default();
+        assert!(net_bytes().is_some(), "GetIfTable2 failed");
+        // Counters only grow.
+        let (down2, up2) = net_bytes().unwrap_or_default();
+        assert!(down2 >= down && up2 >= up);
+    }
+
     /// Samples this PC: `cargo test samples_this_pc -- --ignored --nocapture`.
     #[test]
     #[ignore]
