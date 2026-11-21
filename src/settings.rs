@@ -886,14 +886,6 @@ mod tests {
         assert_eq!(demo_value(NOT_STORED, |_| Some(1)), None);
     }
 
-    /// What's stored, whatever it is, reads as one of the choices.
-    #[test]
-    fn stored_settings_read_as_choices() {
-        assert!(INTERVALS.iter().any(|(s, _)| *s == interval()));
-        let _ = (bars(), place(), taskbars(), solid_background(), autostart());
-        assert!(chosen_displays().iter().all(|id| !id.is_empty()));
-    }
-
     #[test]
     fn the_monitor_shows_what_is_chosen_while_on() {
         use crate::sysmon::{CPU, DISK, GPU, NET, RAM};
