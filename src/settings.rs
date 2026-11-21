@@ -866,6 +866,61 @@ mod tests {
         assert_eq!(unprotect(b"not encrypted"), None);
     }
 
+    /// A value name nothing stores: reading it reads nothing of the user's settings.
+    const NOT_STORED: &str = "TestValueNothingStores";
+
+    /// Values that aren't stored read as their defaults (read only: tests never
+    /// write the registry, and outside the demo nothing is kept in memory).
+    #[test]
+    fn what_is_not_stored_reads_as_its_default() {
+        assert!(!crate::demo::active());
+        assert_eq!(read_dword(NOT_STORED), None);
+        assert_eq!(read_string(NOT_STORED), None);
+        assert_eq!(private_string(NOT_STORED), None);
+        assert_eq!(read_secret(NOT_STORED), None);
+        assert_eq!(reg_string(KEY, &HSTRING::from(NOT_STORED)), None);
+        assert_eq!(warn_level(NOT_STORED, &WARN_WEEKLY, 80), 80);
+        assert_eq!(read_sound(NOT_STORED, 2), SoundChoice::Builtin(2));
+        assert_eq!(read_sound(NOT_STORED, 0), SoundChoice::Off);
+        // Outside the demo, nothing is kept in memory: a write would go to the registry.
+        assert_eq!(demo_value(NOT_STORED, |_| Some(1)), None);
+    }
+
+    /// What's stored, whatever it is, reads as one of the choices.
+    #[test]
+    fn stored_settings_read_as_choices() {
+        assert!(INTERVALS.iter().any(|(s, _)| *s == interval()));
+        let _ = (bars(), place(), taskbars(), solid_background(), autostart());
+        assert!(chosen_displays().iter().all(|id| !id.is_empty()));
+    }
+
+    #[test]
+    fn the_monitor_shows_what_is_chosen_while_on() {
+        use crate::sysmon::{CPU, DISK, GPU, NET, RAM};
+        let none = Prefs::defaults().monitor;
+        assert_eq!((none.chosen(), none.bits()), (0, 0));
+        let some = Monitor { cpu: true, net: true, ..none };
+        assert_eq!((some.chosen(), some.bits()), (CPU | NET, 0));
+        let all = Monitor { on: true, cpu: true, ram: true, gpu: true, net: true, disk: true, ..none };
+        assert_eq!(all.bits(), CPU | RAM | GPU | NET | DISK);
+    }
+
+    /// A fresh install: everything that contacts anything is off.
+    #[test]
+    fn defaults_keep_to_themselves() {
+        let p = Prefs::defaults();
+        assert!(!p.forge && !p.away && !p.mqtt && !p.mailbox && !p.own_extensions && !p.copilot_limit);
+        assert!(!p.monitor.on && p.push.is_none() && p.mqtt_broker.is_none());
+        // Merge requests show somewhere when they're switched on.
+        assert!(p.forge_flyout || p.forge_bubbles);
+        assert!(WARN_WEEKLY.contains(&p.warn_weekly) && WARN_FIVE_HOUR.contains(&p.warn_five_hour));
+        assert!(COUNTDOWN_AT.contains(&p.countdown_at) && TURN_SECS.contains(&p.turn_secs));
+        assert!(AWAY_MINUTES.contains(&p.away_minutes));
+        assert!(SESSION_POLLS.iter().any(|(s, _)| *s == p.session_poll_secs));
+        assert!(INTERVALS.iter().any(|(s, _)| *s == DEFAULT_INTERVAL));
+        assert_eq!(VOLUMES.map(|(v, _)| v), [Volume::Quiet, Volume::Medium, Volume::Loud]);
+    }
+
     #[test]
     fn encrypts_for_this_account() {
         let secret = b"s3cr@t password";
