@@ -33,6 +33,11 @@ def no_details(numbers):
     return {}
 
 
+def setUpModule():
+    # In GitHub Actions the links would name the real repository: these tests' is o/r.
+    os.environ.pop("GITHUB_REPOSITORY", None)
+
+
 class Lines(unittest.TestCase):
     def entries(self, *subjects, body=""):
         return changelog.lines([commit(s) for s in subjects], body, URL, fake_lookup)
