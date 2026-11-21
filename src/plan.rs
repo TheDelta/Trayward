@@ -145,5 +145,30 @@ mod tests {
         assert!(out.windows(2).all(|w| w[0].0 <= w[1].0));
         assert!(out.iter().any(|(p, col)| *p == 0.5 && col.r == 9.0));
         assert!((sample(&stops, 0.25).r - 0.25).abs() < 1e-6);
+        // Past the last stop: its colour; no stops: nothing.
+        assert_eq!(sample(&stops, 2.0), c(1.0));
+        assert_eq!(sample(&[], 0.5).a, 0.0);
+        // A shine near an end keeps only the band inside the text.
+        let out = with_shine(&stops, 0.95, c(9.0));
+        assert!(out.iter().all(|(p, _)| (0.0..=1.0).contains(p)));
+        assert!(!with_shine(&stops, 1.2, c(9.0)).iter().any(|(_, col)| col.r == 9.0));
+    }
+
+    #[test]
+    fn draws_each_plan() {
+        let g = crate::gfx::get().unwrap();
+        for dark in [true, false] {
+            let pal = crate::theme::palette(dark);
+            for (plan, shine) in [("Max 20x", None), ("Ultra", None), ("Ultra", Some(0.4)), (" ultra ", Some(-0.2))] {
+                let t = g.text(&label(plan), 12.0, crate::gfx::SEMIBOLD, None).unwrap();
+                let pixels = crate::gfx::testing::offscreen(120, 30, 96.0, |c| {
+                    draw(c, &t, margin(plan) + 2.0, 6.0, plan, pal, 1.0, shine);
+                })
+                .unwrap();
+                assert!(crate::gfx::testing::drew(&pixels), "{plan}");
+            }
+        }
+        assert_eq!(margin("Ultra"), BADGE_PAD);
+        assert_eq!(margin("Max"), 0.0);
     }
 }

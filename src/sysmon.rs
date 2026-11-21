@@ -518,6 +518,93 @@ mod tests {
         assert_eq!(busiest_engine(std::iter::empty()), 0.0);
     }
 
+    /// Samples this PC (read only), the way the sampler does every second: what's
+    /// off stays empty, what's on is in range.
+    #[test]
+    fn samples_what_is_switched_on() {
+        let mut s = Sampler::default();
+        // Nothing on: nothing read.
+        assert_eq!(s.sample(0), Sample::default());
+        assert!(s.pdh.is_none());
+        // The CPU needs two readings, the network too.
+        let first = s.sample(CPU | RAM | NET);
+        assert_eq!(first.cpu, None);
+        assert_eq!((first.up, first.down), (None, None));
+        assert!(first.ram.is_some_and(|v| v > 0.0 && v <= 100.0), "{first:?}");
+        assert!(first.ram_bytes.is_some_and(|(used, total)| used > 0.0 && used <= total));
+        std::thread::sleep(Duration::from_millis(150));
+        let second = s.sample(CPU | NET);
+        assert!(second.cpu.is_none_or(|v| (0.0..=100.0).contains(&v)), "{second:?}");
+        assert!(second.up.is_some_and(|v| v >= 0.0) && second.down.is_some_and(|v| v >= 0.0));
+        assert_eq!(second.ram, None);
+        // The disk's and GPU's counters: opened for what's on, again when that changes.
+        let disk = s.sample(DISK);
+        assert!(disk.disk.is_none_or(|v| (0.0..=100.0).contains(&v)), "{disk:?}");
+        assert_eq!(s.pdh.as_ref().map(|(opened, _)| *opened), Some((true, false)));
+        let gpu = s.sample(GPU | DISK);
+        assert!(gpu.gpu.is_none_or(|v| (0.0..=100.0).contains(&v)), "{gpu:?}");
+        assert!(gpu.vram.is_none_or(|(used, size)| used >= 0.0 && size.is_none_or(|s| s > 0.0)));
+        assert_eq!(s.pdh.as_ref().map(|(opened, _)| *opened), Some((true, true)));
+        // Switched off: the counters are let go.
+        s.sample(CPU);
+        assert!(s.pdh.is_none());
+    }
+
+    #[test]
+    fn reads_the_cpu_and_memory() {
+        let (idle, total) = cpu_times().unwrap();
+        assert!(idle <= total);
+        let (used, total) = memory().unwrap();
+        assert!(used > 0.0 && used < total);
+        // The cards' sizes are only listed (CI's runner may have none).
+        assert!(video_cards().iter().all(|(_, size)| *size > 0));
+        let time = windows::Win32::Foundation::FILETIME { dwLowDateTime: 2, dwHighDateTime: 1 };
+        assert_eq!(filetime(time), (1 << 32) | 2);
+    }
+
+    /// A query whose counters couldn't be added reads nothing.
+    #[test]
+    fn counters_not_asked_for_read_nothing() {
+        let q = pdh::Query::open(false, false);
+        q.collect();
+        assert_eq!(q.disk_busy(), None);
+        assert_eq!(q.disk_rates(), (None, None));
+        assert_eq!(q.gpu_busy(), None);
+        assert_eq!(q.vram(), None);
+    }
+
+    /// The demo's values: smooth, in range, only for what's on.
+    #[test]
+    fn makes_up_values_for_the_demo() {
+        let mut s = Sampler::default();
+        for _ in 0..50 {
+            let x = s.made_up(CPU | RAM | GPU | NET | DISK);
+            for v in [x.cpu, x.ram, x.gpu, x.disk] {
+                assert!(v.is_some_and(|v| (0.0..=100.0).contains(&v)), "{x:?}");
+            }
+            assert!(x.ram_bytes.is_some_and(|(used, total)| used <= total));
+            assert!(x.vram.is_some_and(|(used, size)| size.is_some_and(|s| used <= s)));
+            assert!([x.up, x.down, x.disk_read, x.disk_write].iter().all(|v| v.is_some_and(|v| v >= 0.0)));
+        }
+        assert_eq!(s.tick, 50);
+        let cpu = s.made_up(CPU);
+        assert!(cpu.cpu.is_some() && cpu.ram.is_none() && cpu.vram.is_none() && cpu.up.is_none());
+    }
+
+    /// The sampler reads what's switched on, once a second, until it's switched off.
+    #[test]
+    fn the_sampler_reports_what_is_on() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let on = spawn(move |sample| {
+            let _ = tx.send(sample);
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(1500)).is_err(), "sampled while off");
+        on.store(RAM, Ordering::Relaxed);
+        let sample = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(sample.ram.is_some() && sample.cpu.is_none());
+        on.store(0, Ordering::Relaxed);
+    }
+
     #[test]
     fn computes_busy_time() {
         assert_eq!(busy_percent((100, 1000), (150, 1100)), Some(50.0));
