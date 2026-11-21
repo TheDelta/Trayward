@@ -848,11 +848,42 @@ pub fn forget_hidden() {
     });
 }
 
+/// For tests: drawing without a window.
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// Draws with `draw` into a `w`×`h` pixel image in memory at `dpi` (no window: the
+    /// same layer the widget draws into) and returns its pixels, 4 bytes each (BGRA,
+    /// premultiplied), rows top down.
+    pub fn offscreen(w: i32, h: i32, dpi: f32, draw: impl FnOnce(&Canvas)) -> Result<Vec<u8>> {
+        let g = get()?;
+        let layer = Layer::new(&g, w, h, dpi)?;
+        layer.draw(draw)?;
+        Ok(tests::pixels(&layer))
+    }
+
+    /// Whether anything was drawn: a pixel that isn't the cleared background.
+    pub fn drew(pixels: &[u8]) -> bool {
+        pixels.chunks_exact(4).any(|p| p.get(3).is_some_and(|&a| a > 2))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn pixels(layer: &Layer) -> Vec<u8> {
+    /// Tests draw the windows into memory: what's drawn shows, an empty frame doesn't.
+    #[test]
+    fn draws_without_a_window() {
+        let red = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+        let drawn = testing::offscreen(20, 10, 96.0, |c| c.fill_rect(0.0, 0.0, 5.0, 5.0, red)).unwrap();
+        assert_eq!(drawn.len(), 20 * 10 * 4);
+        assert!(testing::drew(&drawn));
+        assert!(!testing::drew(&testing::offscreen(20, 10, 96.0, |_| {}).unwrap()));
+    }
+
+    pub(super) fn pixels(layer: &Layer) -> Vec<u8> {
         let (w, h, _) = layer.made_for;
         // SAFETY: the bitmap is w×h pixels of 4 bytes, alive as long as the layer.
         unsafe {

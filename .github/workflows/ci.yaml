@@ -50,6 +50,20 @@ jobs:
       - name: npm run check
         run: npm run check -- --no-rust
 
+      # The release scripts' tests again, under coverage.py, for SonarQube Cloud
+      - name: Release scripts' coverage
+        run: |
+          python -m coverage run --source=scripts --omit='scripts/tests/*' -m unittest discover -q -s scripts/tests
+          python -m coverage xml -o coverage/python/coverage.xml
+          python -m coverage report
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-python
+          path: coverage/python/
+          if-no-files-found: ignore
+          retention-days: 7
+
       # Known-vulnerable or impostor action commits; only this step gets the token
       - name: zizmor (online audits)
         env:
@@ -190,7 +204,7 @@ jobs:
   # SONAR_ORGANIZATION, SONAR_PROJECT_KEY; without the token it does nothing.
   sonar:
     name: SonarQube Cloud
-    needs: rust
+    needs: [checks, rust]
     if: >-
       !cancelled() && github.event_name != 'workflow_dispatch' &&
       (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
@@ -232,13 +246,21 @@ jobs:
             echo "### main at $version" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Coverage report
+      - name: Coverage report (Rust)
         if: steps.target.outputs.args
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true # a Rust job that failed early has none; analyze without it
         with:
           name: coverage-rust
           path: coverage/rust
+
+      - name: Coverage report (Python)
+        if: steps.target.outputs.args
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: coverage-python
+          path: coverage/python
 
       # The scanner makes a module of each Cargo package (the app, the core) and looks
       # for the report from each module's folder: given as an absolute path, both find

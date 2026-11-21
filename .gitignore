@@ -7,3 +7,4 @@ __pycache__/
 # Personal editor settings; the recommended extensions are shared
 /.vscode/*
 !/.vscode/extensions.json
+.coverage
