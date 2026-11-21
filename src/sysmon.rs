@@ -556,8 +556,10 @@ mod tests {
         assert!(idle <= total);
         let (used, total) = memory().unwrap();
         assert!(used > 0.0 && used < total);
-        // The cards' sizes are only listed (CI's runner may have none).
-        assert!(video_cards().iter().all(|(_, size)| *size > 0));
+        // The cards are only listed. CI's runner may have none, or a basic display
+        // adapter without memory of its own, so nothing is said about their sizes.
+        let cards = video_cards();
+        assert!(cards.windows(2).all(|pair| pair.first().map(|c| c.0) != pair.get(1).map(|c| c.0)));
         let time = windows::Win32::Foundation::FILETIME { dwLowDateTime: 2, dwHighDateTime: 1 };
         assert_eq!(filetime(time), (1 << 32) | 2);
     }
