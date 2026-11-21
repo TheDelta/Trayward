@@ -272,7 +272,7 @@ false` on every checkout that doesn't push; top-level `permissions` minimal,
   and drawn in tests into memory (`gfx::testing::offscreen`, no window). Left out of it,
   with the reason in `sonar-project.properties`: `app.rs` (event handling and window
   procedures), the Win32 glue that only runs with real windows (`win.rs`, `edit.rs`,
-  `menu.rs`, `uia.rs`, `main.rs`) and HTTPS/TLS over WinHTTP and SChannel (network). It runs for `main` and for pull
+  `menu.rs`, `uia.rs`, `main.rs`). HTTP and TLS are tested against a server on 127.0.0.1. It runs for `main` and for pull
   requests from this repository only: a fork's pull request gets no secrets in its run,
   and is analyzed once merged. (It used to run on `workflow_run` to analyze forks too,
   checking out their code next to the token; Scorecard and CodeQL rightly flag that

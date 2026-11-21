@@ -299,6 +299,32 @@ impl Drop for TlsStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+
+    /// A server on 127.0.0.1 that sends `answer` to the first connection, then hangs up.
+    fn serve(answer: &'static [u8]) -> (TcpStream, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let _ = s.write_all(answer);
+        });
+        let tcp = TcpStream::connect(addr).unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        (tcp, server)
+    }
+
+    /// A server that hangs up, or answers in plain text instead of TLS: no connection.
+    #[test]
+    fn refuses_anything_but_tls() {
+        let (tcp, server) = serve(b"");
+        server.join().unwrap();
+        assert!(TlsStream::connect(tcp, "localhost").is_err());
+        let (tcp, server) = serve(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        let refused = TlsStream::connect(tcp, "localhost");
+        server.join().unwrap();
+        assert!(refused.is_err());
+    }
 
     /// A real TLS connection, to the host the update check talks to anyway:
     /// the handshake, the certificate check, and a request and its answer.
