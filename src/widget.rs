@@ -1244,11 +1244,18 @@ impl Bar {
             let solid = opts.solid || slot.is_some();
             model.background = if solid { Some(self.taskbar_color(tray.left + 2, tb.bottom - 2)) } else { None };
 
-            // Too wide for the Widgets button even without the bars: slim, as if
-            // chosen in the settings (the slim widget leaves out the same parts).
+            // Too wide for the Widgets button: first without the bars (even when they're
+            // always wanted), then without the system monitor, and only then slim, as if
+            // chosen in the settings (the slim widget leaves out the monitor too, and more).
             if let Some((left, right)) = slot {
-                let need = render(None, &model, h as f32 / scale).map_or(0, |w| (w * scale).ceil() as i32);
-                if model.slim.is_none() && need > right - left {
+                let need = |m: &Model| render(None, m, h as f32 / scale).map_or(0, |w| (w * scale).ceil() as i32);
+                if model.slim.is_none() && model.bars && need(&model) > right - left {
+                    model.bars = false;
+                }
+                if model.slim.is_none() && model.monitor.is_some() && need(&model) > right - left {
+                    model.monitor = None;
+                }
+                if model.slim.is_none() && need(&model) > right - left {
                     model.slim = Some(model.turn % slim_turns(&model).max(1));
                     (model.shine, model.pinned, model.monitor) = (None, None, None);
                 }

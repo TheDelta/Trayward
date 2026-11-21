@@ -72,8 +72,8 @@ Where the widget sits on the taskbar.
   puts it: at the left end when the taskbar icons are centred, next to the tray when they're
   left-aligned. Windows keeps app buttons away from that button, so they no longer run under the
   widget. The widget fits itself to the button's width: narrower, it takes the whole button in the
-  taskbar's colour so the weather doesn't show beside it; wider, it leaves out the usage bars, and
-  goes slim if that's not enough.
+  taskbar's colour so the weather doesn't show beside it; wider, it leaves out the usage bars (even
+  with Usage bars on Always), then the system monitor, and goes slim if that's not enough.
 
 **Widgets** needs Widgets switched on: Windows Settings → Personalization → Taskbar →
 **Widgets**. Without it, Trayward goes back next to the tray. Trayward covers the button, so the
