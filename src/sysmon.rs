@@ -287,14 +287,22 @@ fn net_bytes() -> Option<(u64, u64)> {
     use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     const HARDWARE: u8 = 1;
     const FILTER: u8 = 2;
-    let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
-    // SAFETY: the call allocates the table; it is read within its entry count
-    // and freed with FreeMibTable.
+    let mut out = std::mem::MaybeUninit::<*mut MIB_IF_TABLE2>::uninit();
+    // SAFETY: the call allocates the table and sets the pointer when it succeeds;
+    // the rows follow the header (the type declares one, there are NumEntries),
+    // are read through a raw pointer within that count, and the table is freed
+    // with FreeMibTable.
     unsafe {
-        if GetIfTable2(&mut table).is_err() || table.is_null() {
+        if GetIfTable2(out.as_mut_ptr()).is_err() {
             return None;
         }
-        let rows = std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+        let table = out.assume_init();
+        if table.is_null() {
+            return None;
+        }
+        let first =
+            std::ptr::addr_of!((*table).Table).cast::<windows::Win32::NetworkManagement::IpHelper::MIB_IF_ROW2>();
+        let rows = std::slice::from_raw_parts(first, (*table).NumEntries as usize);
         let (mut down, mut up) = (0u64, 0u64);
         for r in rows {
             let flags = r.InterfaceAndOperStatusFlags._bitfield;
