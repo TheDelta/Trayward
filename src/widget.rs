@@ -1607,4 +1607,356 @@ mod tests {
         let codex_only = Model { claude: false, codex: Some(codex), ..model() };
         assert!(render(None, &codex_only, 40.0).unwrap() > 40.0);
     }
+
+    /// Lays `m` out on a taskbar 40 DIPs high and draws it into memory at 150 %:
+    /// as wide as laid out, and something shows. Returns the width.
+    fn drawn(m: &Model) -> f32 {
+        let w = render(None, m, 40.0).unwrap();
+        let mut again = None;
+        let px = gfx::testing::offscreen((w * 1.5).ceil() as i32, 60, 144.0, |c| {
+            again = Some(render(Some(c), m, 40.0).unwrap());
+        })
+        .unwrap();
+        assert!(gfx::testing::drew(&px));
+        assert_eq!(again, Some(w));
+        w
+    }
+
+    /// [`drawn`] for the column on a side taskbar `width` DIPs wide. Returns the height.
+    fn drawn_column(m: &Model, width: f32) -> f32 {
+        let h = column(None, m, width).unwrap();
+        let mut again = None;
+        let px = gfx::testing::offscreen(width.ceil() as i32, h.ceil() as i32, 96.0, |c| {
+            again = Some(column(Some(c), m, width).unwrap());
+        })
+        .unwrap();
+        assert!(gfx::testing::drew(&px));
+        assert_eq!(again, Some(h));
+        h
+    }
+
+    fn cell(label: &'static str, value: &str, level: Option<f32>, history: Vec<f32>) -> Cell {
+        Cell { label, value: value.into(), widest: &["100%", "999 MB/s"], level, history }
+    }
+
+    /// The system monitor with graphs, a value near its end and an empty column.
+    fn monitor() -> Monitor {
+        let graph: Vec<f32> = (0..HISTORY + 5).map(|i| (i % 7) as f32 / 6.0).collect();
+        Monitor {
+            columns: vec![
+                vec![cell("↑", "31 KB/s", None, graph.clone()), cell("↓", "5 KB/s", None, vec![0.5])],
+                vec![],
+                vec![
+                    cell("CPU", "96%", Some(96.0), graph.clone()),
+                    cell("RAM", "81%", Some(81.0), graph.iter().take(3).copied().collect()),
+                    cell("GPU", "4%", Some(4.0), vec![]),
+                ],
+            ],
+        }
+    }
+
+    /// Models for everything the widget can show, one part at a time.
+    fn every_state() -> Vec<Model> {
+        let busy = Attention { urgent: true, glow: 0.6, shake: 1.5, done_expiring: true, done_glow: 0.4 };
+        let quiet = Attention { done_expiring: true, ..Attention::default() };
+        let codex = Limits { weekly: Some(0), five_hour: None, countdown: [None, Some("3h 2m".into())] };
+        let copilot = Monthly { used: Some(97), countdown: None, note: "9 left".into() };
+        let pinned =
+            |status, urgent| Pinned {
+                name: "a-long-project-name".into(), status, line: "Working · 3m".into(), urgent
+            };
+        let max = Model { plan: Some("Max".into()), five_hour: Some(17), ..model() };
+        vec![
+            model(),
+            Model { attention: busy, stale: true, ..model() },
+            Model { attention: quiet, sessions: [0, 1, 0], ..model() },
+            Model { sessions: [0, 0, 0], weekly: None, plan: None, ..model() },
+            Model {
+                weekly: Some(97),
+                five_hour: Some(85),
+                countdown: [Some("2d 7h".into()), Some("1h 3m".into())],
+                ..max.clone()
+            },
+            Model { five_hour: None, bars: false, ..max.clone() },
+            Model { weekly: Some(0), five_hour: Some(100), weekly_pace: Some(Pace::Out), ..max.clone() },
+            Model { weekly_pace: Some(Pace::Over), day: Some(130), day_turn: true, ..max.clone() },
+            Model { weekly_pace: Some(Pace::Under), day: Some(40), day_over_pace: true, ..max.clone() },
+            Model { day: Some(60), day_turn: true, ..model() },
+            Model { day: Some(60), plan: None, five_hour: None, ..model() },
+            Model { pinned: Some(pinned(Status::Working, false)), ..model() },
+            Model { pinned: Some(pinned(Status::NeedsInput, true)), shine: None, ..model() },
+            Model { monitor: Some(monitor()), ..model() },
+            Model { codex: Some(codex.clone()), copilot: Some(copilot.clone()), stale: true, ..max.clone() },
+            Model { claude: false, copilot: Some(copilot), ..model() },
+            Model { claude: false, codex: Some(codex), ..model() },
+        ]
+    }
+
+    #[test]
+    fn draws_every_state_in_both_themes() {
+        for dark in [true, false] {
+            for m in every_state() {
+                let m = Model { dark, ..m };
+                assert!(drawn(&m) > 2.0 * PAD_X);
+            }
+        }
+    }
+
+    #[test]
+    fn the_slim_widget_draws_each_turn() {
+        for m in every_state() {
+            for turn in 0..=slim_turns(&m) {
+                for bars in [true, false] {
+                    let slim = Model { slim: Some(turn), bars, ..m.clone() };
+                    // As wide in every turn.
+                    let first = Model { slim: Some(0), ..slim.clone() };
+                    assert_eq!(drawn(&slim), render(None, &first, 40.0).unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_column_draws_on_every_side_taskbar() {
+        for m in every_state() {
+            for width in [26.0, 48.0, 60.0, 160.0, 240.0] {
+                let side = Model { column: true, side: true, ..m.clone() };
+                assert!(drawn_column(&side, width) > 10.0);
+            }
+        }
+        // The system monitor as at the bottom, its columns merged into two, or a line per value.
+        let mon = Model { monitor: Some(monitor()), gpg_left: Some(GpgLeft { fraction: 10, ending: true }), ..model() };
+        let heights: Vec<f32> = [300.0, 150.0, 60.0].iter().map(|w| drawn_column(&mon, *w)).collect();
+        assert!(heights[0] <= heights[1] && heights[1] < heights[2], "{heights:?}");
+        // Only the system monitor.
+        let alone = Model { sessions: [0, 0, 0], ..mon };
+        drawn_column(&alone, 300.0);
+        // Two columns stay as they are.
+        let two =
+            Monitor { columns: vec![vec![cell("CPU", "1%", None, vec![])], vec![cell("RAM", "2%", None, vec![])]] };
+        assert_eq!(two_columns(&two), two);
+    }
+
+    /// Without a window to show it on, the widget is still drawn: its background,
+    /// highlight and GPG line, at the bottom and in a column.
+    #[test]
+    fn presents_every_look_without_a_window() {
+        let looks = [
+            Model { background: Some(Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 }), hover: true, ..model() },
+            Model { gpg_left: Some(GpgLeft { fraction: 0, ending: true }), ..model() },
+            Model { gpg_left: Some(GpgLeft { fraction: 80, ending: false }), side: true, hover: true, ..model() },
+            Model {
+                column: true,
+                side: true,
+                hover: true,
+                background: Some(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                ..model()
+            },
+        ];
+        for m in looks {
+            assert!(present(HWND::default(), &m, 300, 200, 60, 144).is_err());
+        }
+    }
+
+    #[test]
+    fn keeps_track_of_its_widgets() {
+        let mut w = Widgets::new();
+        let a = HWND(std::ptr::dangling_mut());
+        assert!(w.hovered().is_none() && w.hwnds().is_empty() && w.displays().is_empty());
+        // The mouse on a widget and off it again; off another one changes nothing.
+        assert!(w.set_hover(a, true));
+        assert!(!w.set_hover(a, true));
+        assert_eq!(w.hovered(), Some(a));
+        assert!(!w.set_hover(HWND::default(), false));
+        assert!(w.set_hover(a, false));
+        // UI Automation's positions: only a change counts.
+        let edges = uia::Edges {
+            taskbar: 1,
+            buttons_right: Some(900),
+            clock_left: None,
+            clock_top: None,
+            widgets: Some((0, 190)),
+        };
+        assert!(w.set_edges(vec![edges]));
+        assert!(!w.set_edges(vec![edges]));
+        assert!(w.widgets_button());
+        // Without widgets on a taskbar, windows have nothing to open next to.
+        w.set_active(a);
+        assert!(!w.is_active(a));
+        assert!(w.anchor().is_none() && w.anchor_in_front().is_none() && w.rect_of(a).is_none());
+        assert!(!w.beyond_main());
+        // A widget whose window is gone: not drawn, not an anchor, dropped on a reset.
+        w.bars.push(Bar {
+            hwnd: HWND::default(),
+            taskbar: HWND::default(),
+            main: false,
+            drawn: None,
+            pos: (0, 0, 0, 0),
+            sampled: None,
+            lines: false,
+        });
+        assert!(w.beyond_main() && w.hwnds() == [HWND::default()]);
+        let opts = Options {
+            bars: settings::Bars::Auto,
+            solid: false,
+            place: settings::Place::Tray,
+            taskbars: settings::Taskbars::Main,
+            chosen: Vec::new(),
+        };
+        w.redraw(&model(), &opts);
+        assert!(w.rect_of(HWND::default()).is_none() && w.anchor().is_none());
+        assert_eq!(w.bars[0].dpi(), 96);
+        w.set_hover(a, true);
+        w.reset();
+        assert!(w.hwnds().is_empty() && w.hovered().is_none());
+    }
+
+    /// A widget whose own window is gone, placed on the desktop window as if it
+    /// were a taskbar: everything is worked out (and drawn into memory), but
+    /// nothing can be shown or moved.
+    #[test]
+    fn places_itself_without_a_window_of_its_own() {
+        use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+        // SAFETY: a plain query.
+        let desktop = unsafe { GetDesktopWindow() };
+        let mut rect = RECT::default();
+        // SAFETY: valid out-pointer.
+        let _ = unsafe { GetWindowRect(desktop, &mut rect) };
+        let opts =
+            |bars, solid, place| Options { bars, solid, place, taskbars: settings::Taskbars::Main, chosen: Vec::new() };
+        let mid = (rect.left + rect.right) / 2;
+        let edges = |widgets| uia::Edges {
+            taskbar: desktop.0 as isize,
+            buttons_right: Some(mid),
+            clock_left: Some(rect.right - 200),
+            clock_top: Some(rect.bottom - 200),
+            widgets,
+        };
+        let wide = Model { monitor: Some(monitor()), five_hour: Some(30), plan: Some("Max".into()), ..model() };
+        for main in [true, false] {
+            for (o, e) in [
+                (opts(settings::Bars::Auto, false, settings::Place::Tray), Some(edges(None))),
+                (opts(settings::Bars::Always, true, settings::Place::Tray), None),
+                (opts(settings::Bars::Never, false, settings::Place::Tray), Some(edges(None))),
+                // On the Widgets button: too narrow for bars, then for the monitor, then slim.
+                (opts(settings::Bars::Always, false, settings::Place::Widgets), Some(edges(Some((10, 400))))),
+                (opts(settings::Bars::Auto, false, settings::Place::Widgets), Some(edges(Some((10, 60))))),
+                (opts(settings::Bars::Always, false, settings::Place::Widgets), Some(edges(Some((10, 60))))),
+            ] {
+                let mut bar = Bar {
+                    hwnd: HWND::default(),
+                    taskbar: desktop,
+                    main,
+                    drawn: None,
+                    pos: (0, 0, 0, 0),
+                    sampled: None,
+                    lines: false,
+                };
+                bar.update(&wide, &o, e);
+                bar.update(&wide, &o, e);
+                // Never shown, so not kept as drawn: the next update tries again.
+                assert!(bar.drawn.is_none());
+                assert!(!bar.alive() && bar.screen_rect().is_none());
+            }
+        }
+        // The taskbar's colour is read once and kept for a while.
+        let mut bar = Bar {
+            hwnd: HWND::default(),
+            taskbar: desktop,
+            main: true,
+            drawn: None,
+            pos: (0, 0, 0, 0),
+            sampled: None,
+            lines: false,
+        };
+        let first = bar.taskbar_color(rect.left, rect.top);
+        assert_eq!(bar.taskbar_color(rect.right - 1, rect.bottom - 1), first);
+        // Read again after a while; not on any screen: the theme's surface.
+        let long_ago = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(11));
+        let mut off = Bar { sampled: long_ago.map(|at| (at, first)), ..bar };
+        let away = off.taskbar_color(-100_000, -100_000);
+        assert_eq!(away, theme::palette(theme::system_dark()).surface);
+        // No taskbar at all: nothing to do.
+        let mut gone = Bar { taskbar: HWND::default(), sampled: None, ..off };
+        gone.update(&model(), &opts(settings::Bars::Auto, true, settings::Place::Tray), None);
+        assert!(gone.drawn.is_none() && gone.pos == (0, 0, 0, 0));
+    }
+
+    /// The same on a taskbar at the left or right: a column on a narrow one,
+    /// two lines on one with labels, with some room to spare before it turns back.
+    #[test]
+    fn places_itself_on_a_side_taskbar_without_a_window_of_its_own() {
+        use windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow;
+        // SAFETY: a plain query.
+        let desktop = unsafe { GetDesktopWindow() };
+        let opts = |solid| Options {
+            bars: settings::Bars::Auto,
+            solid,
+            place: settings::Place::Tray,
+            taskbars: settings::Taskbars::Main,
+            chosen: Vec::new(),
+        };
+        let edges = uia::Edges {
+            taskbar: desktop.0 as isize,
+            buttons_right: None,
+            clock_left: None,
+            clock_top: Some(900),
+            widgets: None,
+        };
+        let m = Model { gpg_left: Some(GpgLeft { fraction: 40, ending: false }), plan: None, ..model() };
+        // As wide as the two lines are there: no bars, no shine, nothing pinned.
+        let laid = Model { side: true, bars: false, shine: None, pinned: None, ..m.clone() };
+        let two_lines = render(None, &laid, LINES_H).unwrap() + 8.0;
+        for main in [true, false] {
+            for (dpi, solid) in [(96, false), (144, true)] {
+                let scale = dpi as f32 / 96.0;
+                let mut bar = Bar {
+                    hwnd: HWND::default(),
+                    taskbar: desktop,
+                    main,
+                    drawn: None,
+                    pos: (0, 0, 0, 0),
+                    sampled: None,
+                    lines: false,
+                };
+                // Narrow: a column.
+                let narrow = RECT { left: 0, top: 0, right: (48.0 * scale) as i32, bottom: 1000 };
+                bar.update_column(&m, &opts(solid), Some(edges), &narrow, dpi);
+                assert!(!bar.lines && bar.drawn.is_none());
+                // Just wide enough for two lines, but without room to spare: still a column.
+                let just = RECT { right: ((two_lines + 10.0) * scale).ceil() as i32, ..narrow };
+                bar.update_column(&m, &opts(solid), Some(edges), &just, dpi);
+                assert!(!bar.lines);
+                // With labels: two lines, kept when it gets a little narrower again.
+                let wide = RECT { right: (240.0 * scale) as i32, ..narrow };
+                bar.update_column(&m, &opts(solid), Some(edges), &wide, dpi);
+                assert!(bar.lines);
+                bar.update_column(&m, &opts(solid), Some(edges), &just, dpi);
+                assert!(bar.lines);
+                // Another display's taskbar waits for its clock.
+                let mut other = Bar { main: false, pos: (1, 2, 3, 4), ..bar };
+                other.update_column(&m, &opts(solid), None, &wide, dpi);
+                assert_eq!(other.pos, (1, 2, 3, 4));
+            }
+        }
+    }
+
+    /// Without the window classes (the app registers them when it starts), no
+    /// widget window can be made: the taskbars are looked at, nothing is added to them.
+    #[test]
+    fn makes_no_window_without_its_class() {
+        assert!(Bar::create(HWND::default(), true).is_none());
+        let mut w = Widgets::new();
+        let opts = Options {
+            bars: settings::Bars::Auto,
+            solid: false,
+            place: settings::Place::Tray,
+            taskbars: settings::Taskbars::All,
+            chosen: Vec::new(),
+        };
+        w.update(&model(), &opts);
+        w.update(&model(), &opts);
+        assert!(w.hwnds().is_empty());
+        assert_eq!(w.displays().len(), taskbars::list().len());
+    }
 }

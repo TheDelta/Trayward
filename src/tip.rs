@@ -312,6 +312,74 @@ mod tests {
         assert!(render(None, &longer).unwrap().0 > w1);
     }
 
+    /// Lays `m` out and draws it into memory: the same size, and something shows.
+    fn drawn(m: &Model) -> (f32, f32) {
+        let size = render(None, m).unwrap();
+        let mut again = None;
+        let px = gfx::testing::offscreen(size.0.ceil() as i32, size.1.ceil() as i32, 96.0, |c| {
+            again = Some(render(Some(c), m).unwrap());
+        })
+        .unwrap();
+        assert!(gfx::testing::drew(&px));
+        assert_eq!(again, Some(size));
+        size
+    }
+
+    #[test]
+    fn draws_every_kind_of_row_in_both_themes() {
+        let row = |l: &str, v: &str| (l.to_string(), v.to_string());
+        let rows = vec![
+            row("Weekly", "46 % · resets Sat 23:31"),
+            row("5-hour", "97 %"),
+            DIVIDER,
+            row("Backup", "Not updated for 2h"),
+            row("Photos", "40%"),
+            row("Music", "0%"),
+            row("Next run", "in 1h"),
+            row("Last run", "failed"),
+            row("Documents", "Done"),
+            DIVIDER,
+            row("Sessions", ""),
+            row("A rather long value", &"that goes on and on ".repeat(30)),
+        ];
+        let plain = Look::default();
+        let looks = vec![
+            (4, Look { bar: Some(0.4), ..plain }),
+            (5, Look { ink: Ink::Warn, bar: Some(0.0) }),
+            (6, Look { ink: Ink::Good, bar: Some(1.5) }),
+            (7, Look { ink: Ink::Bad, bar: None }),
+            (8, Look { ink: Ink::Good, bar: None }),
+            (1, Look { ink: Ink::Bad, bar: None }),
+        ];
+        for dark in [true, false] {
+            let m = Model { dark, rows: rows.clone(), warnings: vec![1], looks: looks.clone(), headings: vec![3, 10] };
+            let (w, h) = drawn(&m);
+            // A long value is cut at its column's width.
+            assert!(w < 2.0 * PAD + COL_GAP + MAX_VALUE_W + BAR_W + BAR_GAP + 120.0, "{w}");
+            assert!(h > 10.0 * 16.0, "{h}");
+        }
+        assert!(gfx::take_cut().iter().any(|c| c.starts_with("that goes on")));
+    }
+
+    #[test]
+    fn opens_and_closes_only_with_a_window() {
+        let mut tip = Tip::new();
+        // Without its window class (the app registers it when it starts): no window.
+        tip.create();
+        assert!(tip.hwnd.is_none());
+        let m = Model {
+            dark: true,
+            rows: vec![("Weekly".into(), "46 %".into())],
+            warnings: vec![],
+            looks: vec![],
+            headings: vec![],
+        };
+        tip.show(m, RECT::default(), 144);
+        assert!(!tip.visible());
+        tip.hide();
+        assert!(!tip.visible() && tip.sizer.shown.is_none());
+    }
+
     #[test]
     fn grows_at_once_and_shrinks_late() {
         use std::time::{Duration, Instant};
