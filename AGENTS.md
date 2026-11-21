@@ -314,7 +314,10 @@ All tests run without the network and without Claude Code.
 - **Rust** (`cargo test`): parsing (session lists, transcripts, hooks, VS Code state),
   statistics, forecasts, time formatting, settings logic, the demo's transcripts. New
   logic that doesn't need a window gets a test, with a small sample line for every
-  file format.
+  file format. The windows' layout and drawing are tested too, without a window:
+  `render(None, …)` lays out, and `gfx::testing::offscreen` draws into memory. Coverage
+  is measured in CI (cargo-llvm-cov, coverage.py) and aims at 80 % (SonarQube Cloud;
+  what it leaves out, and why, is in `sonar-project.properties`).
 - **Release scripts** (`scripts/tests/`, stdlib `unittest`): version bumps, the
   changelog generator, the release notes, the pull request title help.
 - **Visible changes:** run `--demo` and look, in light and dark mode, at 100 % and
