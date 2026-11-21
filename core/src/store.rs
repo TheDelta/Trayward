@@ -48,9 +48,28 @@ pub struct Saved {
     pub mailbox_found: Option<String>,
 }
 
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    static TEST_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Points the tests of this thread (and the writers they start) at their own
+/// folder: tests never read or write the real state.
+#[cfg(any(test, feature = "testing"))]
+pub fn use_dir(dir: &std::path::Path) {
+    TEST_DIR.with(|d| *d.borrow_mut() = Some(dir.to_path_buf()));
+}
+
 fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("Trayward").join("state.json"))
+    #[cfg(any(test, feature = "testing"))]
+    {
+        TEST_DIR.with(|d| d.borrow().as_ref().map(|d| d.join("state.json")))
+    }
+    #[cfg(not(any(test, feature = "testing")))]
+    {
+        let base = std::env::var_os("LOCALAPPDATA")?;
+        Some(PathBuf::from(base).join("Trayward").join("state.json"))
+    }
 }
 
 pub fn load() -> Saved {
@@ -124,7 +143,11 @@ const SAVE_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 impl Writer {
     pub fn spawn() -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<Request>();
+        #[cfg(any(test, feature = "testing"))]
+        let dir = TEST_DIR.with(|d| d.borrow().clone());
         std::thread::spawn(move || {
+            #[cfg(any(test, feature = "testing"))]
+            TEST_DIR.with(|d| *d.borrow_mut() = dir);
             crate::os::background_thread();
             while let Ok(first) = rx.recv() {
                 let (mut newest, mut waiting) = match first {

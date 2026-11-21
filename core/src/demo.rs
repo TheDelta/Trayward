@@ -657,9 +657,18 @@ fn project_folder(cwd: &str) -> String {
 pub fn start() {
     let base = std::env::temp_dir().join("trayward-demo");
     let _ = std::fs::remove_dir_all(&base);
-    let config = base.join(".claude");
     let now = crate::os::now_ms() / 1000;
     let utc_offset = crate::timefmt::utc_offset(now);
+    let config = generate(&base, now, utc_offset);
+    let _ = STARTED.set(std::time::Instant::now());
+    let _ = DIR.set(config.clone());
+    std::thread::spawn(move || direct(&config));
+}
+
+/// Writes the demo's files into `base`, as they are at `now`; returns its
+/// Claude Code config folder.
+fn generate(base: &Path, now: i64, utc_offset: i64) -> PathBuf {
+    let config = base.join(".claude");
     let mut rng = Rng(0x007e_a5ad);
     for (i, spec) in SPECS.iter().enumerate() {
         let p = &PROJECTS[spec.project];
@@ -739,9 +748,7 @@ pub fn start() {
     copilot(&base.join(".copilot"), now);
     mailbox(&base.join(".claude-mailbox"), now);
     extension(&base.join("extensions"), now);
-    let _ = STARTED.set(std::time::Instant::now());
-    let _ = DIR.set(config.clone());
-    std::thread::spawn(move || direct(&config));
+    config
 }
 
 /// When the demo started.
