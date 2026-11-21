@@ -216,7 +216,7 @@ pub fn fill(template: &str, args: &[&dyn std::fmt::Display]) -> String {
 #[cfg(any(test, feature = "testing"))]
 #[allow(clippy::unwrap_used, reason = "only for tests: a file that can't be read should stop them")]
 pub mod testing {
-    use super::*;
+    use super::{GERMAN, German, HashMap, Table};
 
     /// The placeholders of a template, sorted.
     pub fn placeholders(s: &str) -> Vec<String> {
