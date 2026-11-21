@@ -240,15 +240,17 @@ jobs:
           name: coverage-rust
           path: coverage/rust
 
-      # The report names files relative to the repository; the scanner resolves them
-      # from the workspace (relative ones from each Cargo package's folder, which
-      # loses the core crate's)
+      # The scanner makes a module of each Cargo package (the app, the core) and looks
+      # for the report from each module's folder: given as an absolute path, both find
+      # it, and with absolute paths in it, each takes its own files
       - name: Coverage paths
+        id: coverage
         if: steps.target.outputs.args
         run: |
           if [ -f coverage/rust/lcov.info ]; then
             sed -i "s|^SF:\([^/]\)|SF:$GITHUB_WORKSPACE/\1|" coverage/rust/lcov.info
             grep -m 2 '^SF:' coverage/rust/lcov.info
+            echo "args=-Dsonar.rust.lcov.reportPaths=$GITHUB_WORKSPACE/coverage/rust/lcov.info" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::No coverage-rust from the Rust job: analyzed without coverage"
           fi
@@ -259,4 +261,4 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
-          args: ${{ steps.target.outputs.args }} ${{ steps.version.outputs.args }}
+          args: ${{ steps.target.outputs.args }} ${{ steps.version.outputs.args }} ${{ steps.coverage.outputs.args }}

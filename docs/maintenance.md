@@ -264,8 +264,9 @@ false` on every checkout that doesn't push; top-level `permissions` minimal,
   `sonar-project.properties`) for the coverage: automatic analysis can't read coverage
   reports. The Rust (newest) job uploads `coverage-rust` (`cargo llvm-cov --lcov`, paths
   made relative to the repository); the SonarQube job takes it from the same run and
-  makes its paths absolute for the scanner on Linux (relative ones it resolves from each
-  Cargo package's folder, which loses the core crate). It runs for `main` and for pull
+  makes its paths absolute, and passes the report's own path as an absolute one: the scanner
+  makes a module of each Cargo package (the app, the core) and looks for the report from each
+  module's folder, so the core got none. It runs for `main` and for pull
   requests from this repository only: a fork's pull request gets no secrets in its run,
   and is analyzed once merged. (It used to run on `workflow_run` to analyze forks too,
   checking out their code next to the token; Scorecard and CodeQL rightly flag that
