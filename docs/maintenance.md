@@ -275,12 +275,12 @@ false` on every checkout that doesn't push; top-level `permissions` minimal,
   `SONAR_PROJECT_KEY`). `main`'s analyses pass `sonar.projectVersion` (read from
   `Cargo.toml` with `sed`, no repository code runs), so with New Code = "Previous
   version" SonarQube shows what each release adds and marks releases in its Activity
-  graph. Only `src`, `core/src`, `build.rs` and `scripts` are analyzed (the workflows are
-  zizmor's and actionlint's). Findings that stay are listed in `sonar-project.properties`
+  graph. The whole repository is analyzed (SonarQube Cloud ignores `sonar.sources` now), but for
+  the release scripts' tests (`sonar.exclusions`). Findings that stay are listed in `sonar-project.properties`
   with their reasons (`sonar.issue.ignore.multicriteria`), not clicked away on the website:
   the release scripts taking file names from their command line, the dev scripts
-  starting tools from PATH, and the complexity limit (30) in the five files that draw the
+  starting tools from PATH, and the complexity limit (30) in the six files that draw the
   windows and handle their events (`app.rs`, `flyout.rs`, `settings_window.rs`,
-  `stats_window.rs`, `widget.rs`), where one function per window is the design. Everywhere
+  `stats_window.rs`, `widget.rs`, `tip.rs`), where one function per window is the design. Everywhere
   else the limit holds: a function over it is split. Clippy's `redundant_closure_for_method_calls` is on because
   Sonar asks for the same.
