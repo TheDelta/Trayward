@@ -1,0 +1,9 @@
+/target
+*.pdb
+/node_modules
+/.venv
+__pycache__/
+/coverage
+# Personal editor settings; the recommended extensions are shared
+/.vscode/*
+!/.vscode/extensions.json

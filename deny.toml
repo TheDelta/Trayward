@@ -1,0 +1,37 @@
+# cargo-deny: what the dependencies must be (`cargo deny check`, in `npm run check` and CI).
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# The app's system and the one "Core on Linux" checks.
+targets = ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
+# RustSec's advisory database: known vulnerabilities, crates no longer maintained, yanked releases.
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+# An advisory that doesn't apply goes here with its id and why.
+ignore = []
+
+# MIT or Apache-2.0, as AGENTS.md asks of every crate. Two crates other crates bring in have
+# another permissive license too; they're allowed by name, nothing else.
+[licenses]
+allow = ["MIT", "Apache-2.0"]
+confidence-threshold = 0.93
+exceptions = [
+    # serde_json's hash map (hashbrown) hashes with it
+    { crate = "foldhash", allow = ["Zlib"] },
+    # Unicode's data, used only while compiling (proc-macro2, syn)
+    { crate = "unicode-ident", allow = ["Unicode-3.0"] },
+]
+
+[bans]
+# Two versions of a crate: worth knowing, not a failure (the newer one usually follows).
+multiple-versions = "warn"
+# Versions are exact in Cargo.toml (`*` never); the workspace's own crate goes by path.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# Crates come from crates.io only.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

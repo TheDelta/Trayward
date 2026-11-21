@@ -1,0 +1,5 @@
+#define RT_MANIFEST 24
+1 ICON "assets/icon.ico"
+1 RT_MANIFEST "app.manifest"
+// Version, author and copyright (Explorer: Properties -> Details), made by build.rs from Cargo.toml.
+#include "version.rc"

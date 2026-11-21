@@ -1,0 +1,43 @@
+{
+  "name": "trayward",
+  "private": true,
+  "license": "MIT",
+  "description": "Trayward: the development tools (formatting, spelling, commit messages, Git hooks); the app itself is Rust",
+  "type": "module",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "^11",
+      "onFail": "warn"
+    }
+  },
+  "scripts": {
+    "prepare": "husky",
+    "start": "node scripts/run.mjs start",
+    "demo": "node scripts/run.mjs demo",
+    "stop": "node scripts/run.mjs stop",
+    "extension-example": "node scripts/extension-example.mjs",
+    "build": "node scripts/run.mjs build",
+    "check": "node scripts/check.mjs",
+    "format": "node scripts/check.mjs --fix",
+    "test": "cargo test --locked && python -m unittest discover -s scripts/tests"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@cspell/dict-de-de": "4.1.3",
+    "cspell": "10.5.2",
+    "husky": "9.1.7",
+    "lint-staged": "17.6.1",
+    "markdownlint-cli2": "0.24.1",
+    "prettier": "3.10.1"
+  },
+  "overrides": {
+    "katex@<0.18.2": "0.19.1"
+  }
+}

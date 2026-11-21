@@ -1,0 +1,82 @@
+# The title becomes the squash commit and its changelog line.
+# Pull requests are squash merged and "Prepare release" actions
+# turns it into the CHANGELOG.md line
+name: Pull request
+run-name: ${{ github.event.pull_request.title }}
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: PR title
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: package.json # devEngines.runtime
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+        env:
+          HUSKY: "0"
+
+      # Conventional Commits, and spelled right: the title becomes a CHANGELOG.md line, which CSpell checks
+      - name: Conventional Commits title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          lint_ok=true spell_ok=true
+          printf '%s\n' "$TITLE" | npx --no -- commitlint --verbose > lint.txt 2>&1 || lint_ok=false
+          printf '%s\n' "$TITLE" | npx --no -- cspell --no-progress --no-summary --words-only --unique stdin > words.txt || spell_ok=false
+          cat lint.txt
+          [ "$spell_ok" = true ] || echo "Unknown words: $(tr '\n' ' ' < words.txt)"
+          if [ "$lint_ok" = true ] && [ "$spell_ok" = true ]; then exit 0; fi
+          flags=(--words words.txt)
+          [ "$lint_ok" = true ] && flags+=(--lint-ok)
+          python3 scripts/pr_title.py fail --title "$TITLE" --pr "$PR" "${flags[@]}" < lint.txt >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::The title needs a fix (format or spelling): see the comment on the pull request or this run's summary"
+          exit 1
+
+  # A pull request merged after Prepare release would reach no changelog: the tag goes
+  # on the release merge, and the next release starts there. Skipped (which counts as
+  # passed) on other pull requests.
+  notes:
+    name: Release notes
+    if: startsWith(github.head_ref, 'release/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tags and main's commits since the release commit
+          persist-credentials: false
+
+      - name: Every merged pull request is in the notes
+        run: |
+          if ! python3 scripts/release.py missing > missing.txt; then
+            cat missing.txt
+            {
+              echo "### Merged after Prepare release"
+              echo
+              cat missing.txt
+              echo
+              echo "Run **Prepare release** again with the same version (it replaces this branch:"
+              echo "edits made here are lost), or add these lines to \`CHANGELOG.md\` on this branch."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error file=CHANGELOG.md::Pull requests merged after Prepare release are missing from the notes: see the summary"
+            exit 1
+          fi
+          cat missing.txt

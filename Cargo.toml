@@ -1,0 +1,119 @@
+[package]
+name = "trayward"
+version = "0.1.0"
+authors = ["Alex 'Delta' Diller"]
+edition = "2024"
+rust-version = "1.85"
+description = "Your AI coding agents' usage limits and sessions in the taskbar: Claude Code, Codex CLI and GitHub Copilot, on Windows 11"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/TheDelta/trayward"
+keywords = ["claude", "claude-code", "taskbar", "windows", "usage"]
+categories = ["development-tools"]
+publish = false
+
+# The Windows app (this package) and the logic it's built on (`core`: providers,
+# parsing, forecasts, statistics, without the UI), which another system's app can
+# share. See AGENTS.md, "Providers and platforms".
+[workspace]
+members = ["core"]
+# `cargo build`, `test` and `clippy` here cover both.
+default-members = [".", "core"]
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+# preserve_order keeps the key order of ~/.claude/settings.json when hooks are installed.
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+windows = "0.62.2"
+
+[dependencies]
+trayward-core = { path = "core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Point/matrix types used by the Direct2D API of the `windows` crate.
+windows-numerics = "0.3.1"
+
+[dev-dependencies]
+# Its test behaviour in this crate's tests too: a language per test thread, no real data folders.
+trayward-core = { path = "core", features = ["testing"] }
+
+[dependencies.windows]
+workspace = true
+features = [
+    "Win32_Devices_Display",
+    "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Controls",
+    "Win32_Graphics_Imaging",
+    "Win32_Media_Audio",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+# Doc comments: links that lead nowhere or to a private item, and stray HTML, fail `cargo doc`.
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+invalid_html_tags = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Every `unsafe` block says why it's sound (`// SAFETY: …`).
+undocumented_unsafe_blocks = "warn"
+# Defensive code: no unwrap/expect/panic outside tests (clippy.toml lets tests have them);
+# a value that can be missing is handled, one that can't is said so with a reason.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+# Text is never cut by position (`&text[a..b]`): one byte off, or inside a character, and the
+# app would end. `get`, `split_once` and `strip_prefix` say what happens then.
+string_slice = "warn"
+# Nothing left over from debugging, nothing unfinished; a GUI app has no console.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+# A method is named, not wrapped in a closure that only calls it (`.map(ToString::to_string)`).
+redundant_closure_for_method_calls = "warn"
+# An exception to a lint says why.
+allow_attributes_without_reason = "warn"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

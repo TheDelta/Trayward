@@ -1,0 +1,181 @@
+# Checks on every push to main and every pull request
+# Locally: `npm run check`
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HUSKY: "0" # no Git hooks on the runner
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Lint and checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: package.json # devEngines.runtime
+          cache: npm
+
+      - name: Install the tools (package-lock.json, requirements-dev.txt)
+        run: |
+          npm ci --ignore-scripts
+          python -m pip install --require-hashes -r requirements-dev.txt
+
+      # Everything but Rust (the next job, on Windows); with the release scripts' tests
+      - name: npm run check
+        run: npm run check -- --no-rust
+
+      # Known-vulnerable or impostor action commits; only this step gets the token
+      - name: zizmor (online audits)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor .github
+
+  # The logic without the UI (core/) must keep building elsewhere: Clippy checks it,
+  # tests included, on Linux (where its `os` module has fallbacks)
+  core-linux:
+    name: Core on Linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustc --version
+
+      - name: Clippy
+        run: cargo clippy -p trayward-core --all-targets --locked -- -D warnings
+
+  # The crates against RustSec's advisories, the allowed licenses and sources (deny.toml)
+  dependencies:
+    name: Rust dependencies
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A prebuilt cargo-deny, checked against the action's checksums
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-deny@0.21.0
+
+      - name: cargo-deny
+        run: cargo-deny --locked check
+
+      # The release attaches the crates' license texts: each crate must ship one
+      - name: Third-party licenses
+        run: python3 scripts/licenses.py
+
+  rust:
+    name: Rust (${{ matrix.role }})
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: bash # Git Bash; PowerShell is the default on Windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: oldest # rust-version in Cargo.toml
+            toolchain: "1.85"
+          - role: newest
+            toolchain: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust ${{ matrix.toolchain }}
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt,clippy,llvm-tools-preview
+          rustup default "$TOOLCHAIN"
+          rustc --version
+
+      - name: rustfmt
+        if: matrix.role == 'newest'
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Tests
+        if: matrix.role == 'oldest'
+        run: cargo test --locked
+
+      # Broken links and HTML in doc comments (rustdoc lints in Cargo.toml)
+      - name: Docs
+        if: matrix.role == 'newest'
+        run: cargo doc --no-deps --document-private-items --workspace --locked
+
+      # A prebuilt cargo-llvm-cov, checked against the action's checksums (no build
+      # from source on every run)
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        if: matrix.role == 'newest'
+        with:
+          tool: cargo-llvm-cov@0.9.1
+
+      # The same tests, measured; lcov.info is for SonarQube Cloud (sonar.yaml), whose
+      # scanner runs on Linux: the files as paths relative to the repository
+      - name: Tests (with coverage)
+        if: matrix.role == 'newest'
+        run: |
+          cargo llvm-cov --workspace --locked --lcov --output-path coverage/rust/lcov.info
+          cargo llvm-cov report --summary-only
+          python - <<'EOF'
+          import os, pathlib
+          report, root = pathlib.Path("coverage/rust/lcov.info"), os.getcwd()
+          lines = report.read_text(encoding="utf-8").splitlines(keepends=True)
+          fix = lambda l: f"SF:{os.path.relpath(l[3:].strip(), root).replace(os.sep, '/')}\n"
+          report.write_text("".join(fix(l) if l.startswith("SF:") else l for l in lines), encoding="utf-8", newline="\n")
+          EOF
+          grep -m 3 '^SF:' coverage/rust/lcov.info
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() && matrix.role == 'newest' }}
+        with:
+          name: coverage-rust
+          path: coverage/rust/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # The exe of this commit, to try a change without building it
+      - name: Build
+        if: matrix.role == 'newest'
+        run: cargo build --release --locked
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.role == 'newest'
+        with:
+          name: trayward-${{ github.sha }}
+          path: target/release/trayward.exe
+          retention-days: 14

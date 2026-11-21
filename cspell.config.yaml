@@ -1,0 +1,238 @@
+# CSpell: spelling in code, docs and configs (npm run check, the hooks, PR titles)
+version: "0.2"
+language: en-GB,en,de-DE
+import:
+  - "@cspell/dict-de-de/cspell-ext.json" # the German translations
+useGitignore: true
+ignorePaths:
+  - .git
+  - .husky/_
+  - target
+  - node_modules
+  - .venv
+  - package.json
+  - package-lock.json
+  - Cargo.lock
+  - requirements-dev.txt
+  - CODE_OF_CONDUCT.md # third-party text
+  - "*.ico"
+  - "*.png"
+ignoreRegExpList:
+  - uses:\s*\S+ # pinned actions
+  # Package names in Dependabot titles: "bump a, b and c from"
+  - (?<=\bbump )[@\w./-]+(?:(?:, | and )[@\w./-]+)*
+  # Win32 constants and Segoe Fluent Icons code points
+  - /\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/g # case-sensitive: a plain pattern ignores case
+  - \\u\{[0-9A-Fa-f]+\}
+  # Win32 type names (BITMAPINFO, HMONITOR)
+  - /\b[A-Z][A-Z0-9]{3,}\b/g
+  # A test with accented letters
+  - äöüßéèê
+  # SHA-256 sums and hex colours
+  - \b[0-9a-f]{12,}\b
+overrides:
+  - filename: "**/*.rs"
+    languageId: rust
+  - filename: ".github/workflows/*.yaml"
+    dictionaries: [shell, bash]
+# Keep the list sorted
+words:
+  - actionlint
+  - Addrs
+  - addrs
+  - artipacked
+  - ascii
+  - Authenticode
+  - availabilityoffline
+  - availabilityonline
+  - bdemo
+  - Bezier
+  - bitbucket
+  - bitfield
+  - bufs
+  - charliermarsh
+  - chev
+  - Claude
+  - claude
+  - Clippy
+  - clippy
+  - CLSID
+  - codegen
+  - commitlint
+  - commondir
+  - Connack
+  - connack
+  - creds
+  - davidanson
+  - Deque
+  - Diller
+  - discordapp
+  - Docstrings
+  - docstrings
+  - Dolph
+  - Dproject
+  - Dsonar
+  - Dxgi
+  - Efmt
+  - endgroup
+  - engtype
+  - esbenp
+  - euclid
+  - filetime
+  - Flyouts
+  - FOLDERID
+  - foldhash
+  - gemergt
+  - getcwd
+  - gitdir
+  - gitea
+  - gitee
+  - github
+  - gitlab
+  - glab
+  - gldt
+  - gloas
+  - glpat
+  - glptt
+  - Gotify
+  - gotify
+  - gpgconf
+  - gpgsign
+  - grbit
+  - hashbrown
+  - hexdigit
+  - HICON
+  - hicon
+  - Hinnant
+  - homeassistant
+  - hostport
+  - hovercards
+  - hresult
+  - huggingface
+  - Hwnd
+  - hwnd
+  - hwnds
+  - IDXGI
+  - Integrationen
+  - inuse
+  - IWIC
+  - katex
+  - keepends
+  - keygrip
+  - KEYINFO
+  - keyinfo
+  - linux
+  - lpfn
+  - lpstr
+  - lpsz
+  - luid
+  - lycheeverse
+  - Marqueefin
+  - mccabe
+  - Monday
+  - monday
+  - Mosquitto
+  - mosquitto
+  - MQTT
+  - Mqtt
+  - mqtt
+  - mqtts
+  - msvc
+  - multicriteria
+  - mypy
+  - ncols
+  - Ndis
+  - nocapture
+  - nodelay
+  - nologo
+  - nonoverlapping
+  - ntdll
+  - Ntfy
+  - ntfy
+  - oneline
+  - openpgp
+  - ossf
+  - pathlib
+  - PBGRA
+  - pokémon
+  - Polybar
+  - popd
+  - premajor
+  - preminor
+  - prepatch
+  - pullrequest
+  - pushd
+  - pycache
+  - pyflakes
+  - pyproject
+  - pytest
+  - pythonsecurity
+  - pyupgrade
+  - Qube
+  - rayward
+  - recv
+  - redhat
+  - reflog
+  - reflogs
+  - relayout
+  - relpath
+  - rfind
+  - Rollup
+  - rposition
+  - rsplit
+  - rustc
+  - rustdoc
+  - rustflags
+  - rustup
+  - sarif
+  - SChannel
+  - Schannel
+  - seerr
+  - Segoe
+  - segs
+  - serde
+  - shellcheck
+  - Sidechain
+  - sidechains
+  - signingkey
+  - Sigstore
+  - sonarlint
+  - sonarsource
+  - sourceforge
+  - splitlines
+  - Sqlite
+  - sqlite
+  - startswith
+  - statsig
+  - stdlib
+  - subsec
+  - taiki
+  - tamasfe
+  - tanuki
+  - taskkill
+  - Terminalfenster
+  - Thursday
+  - thursday
+  - timefmt
+  - tojson
+  - toks
+  - Toolhelp
+  - toolu
+  - Trayward
+  - trayward
+  - Traywards
+  - unicode
+  - unmute
+  - urlopen
+  - userinfo
+  - venv
+  - Verbindet
+  - vivaxy
+  - vram
+  - vscdb
+  - Waybar
+  - winget
+  - winsqlite
+  - winver
+  - worktrees
+  - zizmor

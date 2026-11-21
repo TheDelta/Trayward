@@ -1,0 +1,4 @@
+# The C runtime is linked into the exe: Trayward is one file that runs on a PC
+# without the Visual C++ redistributable (VCRUNTIME140.dll isn't part of Windows).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,6 @@
+# Clippy's settings; the lints themselves are in Cargo.toml ([workspace.lints]).
+# Tests may unwrap, expect, panic and print: a failing test should stop loudly.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true

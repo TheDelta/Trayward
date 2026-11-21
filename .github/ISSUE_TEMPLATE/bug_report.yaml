@@ -1,0 +1,94 @@
+name: 🐛 Bug report
+description: Something doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please check the [existing issues](https://github.com/TheDelta/trayward/issues) first.
+
+        - Questions and setup help: [Discussions → Q&A](https://github.com/TheDelta/trayward/discussions/categories/q-a)
+        - Security problems: please report them privately, see [SECURITY.md](https://github.com/TheDelta/trayward/blob/main/SECURITY.md)
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A clear description of the problem. Screenshots help; `trayward.exe --demo` shows made-up data if you'd rather not show your own.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a Claude Code session in VS Code
+        2. Click the widget and …
+        3. …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where does it happen?
+      multiple: true
+      options:
+        - The widget in the taskbar
+        - The flyout (limits, sessions)
+        - Statistics
+        - Settings
+        - Bubbles and sounds
+        - Hooks (instant updates)
+        - Sessions in WSL
+        - Documentation
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Trayward version
+      description: Shown in Settings → About
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Operating system and version
+      description: "On Windows, `winver` shows it"
+      placeholder: "Windows 11 25H2 (26200)"
+    validations:
+      required: true
+
+  - type: input
+    id: claude
+    attributes:
+      label: Which agents, their versions, and where they run
+      placeholder: "Claude Code 2.1.0 in the VS Code extension; Codex CLI 0.50 in Windows Terminal"
+
+  - type: textarea
+    id: details
+    attributes:
+      label: More details
+      description: Your taskbar setup (several displays, alignment, scaling), anything else that may matter. **Leave out project names, paths and tokens you don't want to share.**
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues and this hasn't been reported yet.
+          required: true
+        - label: I removed tokens, private paths and other private details from this report.
+          required: true

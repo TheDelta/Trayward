@@ -1,0 +1,41 @@
+# Trayward's logic, without the UI: the agents' files and APIs (Claude Code,
+# Codex CLI, Copilot), sessions, forecasts, alerts, statistics, MQTT, push, the
+# update check, and what it asks of the system (`src/os`). Part of the app; its
+# version is the app's (the root Cargo.toml), this one is never published.
+[package]
+name = "trayward-core"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[features]
+# For other crates' tests: what this crate's own tests get (a language per test
+# thread, untranslated text recorded, a test folder for kept statistics). Never
+# in a build of the app.
+testing = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies.windows]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Networking_WinHttp",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+]
+
+[lints]
+workspace = true

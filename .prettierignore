@@ -1,0 +1,6 @@
+# Generated or third-party
+package-lock.json
+Cargo.lock
+CODE_OF_CONDUCT.md
+.venv/
+target/
