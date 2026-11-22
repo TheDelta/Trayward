@@ -206,7 +206,9 @@ def release_body(text, version):
 def missing(root, version):
     """Changelog lines of pull requests merged after Prepare release made the
     release commit of `version` and that its notes don't have (lines removed from
-    the notes by hand before that stay removed). Offline, so without authors."""
+    the notes by hand before that stay removed). Offline, so without authors.
+    Only pull requests count: what reaches main comes squash merged, with its number,
+    and a commit without one is an edit on the release branch itself (its notes)."""
     found = changelog.commits(root)
     title = f"v{version}"
     made = [
@@ -216,7 +218,7 @@ def missing(root, version):
     ]
     if not made:
         return []  # not a release branch
-    late = changelog.commits(root, since=made[-1])
+    late = [c for c in changelog.commits(root, since=made[-1]) if changelog.parse(c)["pr"]]
     body = release_body(read(root, CHANGELOG_MD), version)
     url = f"https://github.com/{github_repo(root)}"
     return changelog.lines(late, body, url, lambda _: {})

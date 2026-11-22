@@ -307,6 +307,9 @@ class FromGit(unittest.TestCase):
         self.git("switch", "-q", "-c", "release/v1.1.0")
         self.commit("chore(release): v1.1.0")
         self.assertEqual(release.missing(self.root, "1.1.0"), [])
+        # The notes edited on the release branch: no pull request of its own.
+        self.commit("docs: the notes trimmed")
+        self.assertEqual(release.missing(self.root, "1.1.0"), [])
         self.git("switch", "-q", "main")
         self.commit("fix: late (#22)")
         self.git("switch", "-q", "release/v1.1.0")
