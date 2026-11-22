@@ -469,18 +469,6 @@ pub fn switch_to(config_dir: &Path, target: &Target) -> Result<(), String> {
     Ok(())
 }
 
-/// German translations of its messages (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("The session's folder is part of a multi-root workspace, which can't be switched to.", "Der Ordner der Sitzung gehört zu einem Arbeitsbereich mit mehreren Stammordnern; dorthin kann Trayward nicht wechseln."),
-    ("No open VS Code window has this session's folder. Was the window closed?", "Kein offenes VS-Code-Fenster hat den Ordner dieser Sitzung. Wurde das Fenster geschlossen?"),
-    ("Couldn't start VS Code: {0}", "VS Code ließ sich nicht starten: {0}"),
-    ("Unexpected session id.", "Unerwartete Sitzungs-ID."),
-    ("Can't find VS Code's exe.", "Die Programmdatei von VS Code wurde nicht gefunden."),
-    ("VS Code isn't running.", "VS Code läuft nicht."),
-    ("VS Code didn't come to the front.", "VS Code kam nicht nach vorne."),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

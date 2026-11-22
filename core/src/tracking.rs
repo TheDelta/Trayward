@@ -223,14 +223,6 @@ fn unexpected(settings: &Value) -> Option<String> {
         .map(|(event, _)| format!("\"hooks.{event}\" isn't a list"))
 }
 
-/// German translations of its messages (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("Can't read {0}: {1}", "{0} lässt sich nicht lesen: {1}"),
-    ("Can't write {0}: {1}", "{0} lässt sich nicht schreiben: {1}"),
-    ("Can't find this app's exe: {0}", "Die Programmdatei dieser App wurde nicht gefunden: {0}"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

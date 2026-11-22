@@ -346,22 +346,6 @@ pub fn send(c: &Config, text: &str) -> Result<(), String> {
     }
 }
 
-/// German translations of this file's text (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("The demo sends nothing", "Die Demo sendet nichts"),
-    ("The server answered {0}", "Der Server antwortete {0}"),
-    ("The server answered {0}: check the token", "Der Server antwortete {0}: prüfe das Token"),
-    ("That isn't an http:// or https:// address", "Das ist keine http://- oder https://-Adresse"),
-    ("Enter the address", "Gib die Adresse ein"),
-    ("Enter the topic", "Gib das Thema ein"),
-    ("A topic has letters, digits, - and _ only", "Ein Thema hat nur Buchstaben, Ziffern, - und _"),
-    ("The token has a space or another character it can't have", "Das Token hat ein Leerzeichen oder ein anderes unzulässiges Zeichen"),
-    ("Enter the server's address", "Gib die Adresse des Servers ein"),
-    ("The server isn't an http:// or https:// address", "Der Server ist keine http://- oder https://-Adresse"),
-    ("Enter the app's token (Gotify → Apps)", "Gib das Token der App ein (Gotify → Apps)"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

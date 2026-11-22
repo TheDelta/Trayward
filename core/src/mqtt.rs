@@ -690,25 +690,6 @@ pub fn spawn(report: impl Fn(Status) + Send + 'static) -> Sender<Command> {
     tx
 }
 
-/// German translations of this file's text (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("No mqtt:// address on the clipboard", "Keine mqtt://-Adresse in der Zwischenablage"),
-    ("The address isn't a host name or IP address", "Die Adresse ist kein Hostname und keine IP-Adresse"),
-    ("The port is a number from 1 to 65535", "Der Port ist eine Zahl von 1 bis 65535"),
-    ("the broker doesn't speak MQTT 3.1.1", "der Broker spricht kein MQTT 3.1.1"),
-    ("the broker refused the client id", "der Broker lehnt die Client-ID ab"),
-    ("the broker is unavailable", "der Broker ist nicht verfügbar"),
-    ("wrong user name or password", "Benutzer oder Passwort falsch"),
-    ("not authorised: the broker refused this user name and password", "nicht berechtigt: der Broker lehnt diesen Benutzernamen und dieses Passwort ab"),
-    ("the broker answered {0}", "der Broker antwortete {0}"),
-    ("{0} not found ({1})", "{0} nicht gefunden ({1})"),
-    ("{0} not found", "{0} nicht gefunden"),
-    ("TLS: {0}", "TLS: {0}"),
-    ("no answer from the broker", "keine Antwort vom Broker"),
-    ("connection lost", "Verbindung verloren"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

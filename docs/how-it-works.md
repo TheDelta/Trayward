@@ -899,7 +899,7 @@ The app:
 | `src/settings_window.rs` | The settings window                                                                  |
 | `src/edit.rs`            | The settings' text fields: Windows' edit controls over the drawn boxes               |
 | `src/help.rs`            | The settings' "?": short help on hover, its section of docs/settings.md on click     |
-| `src/i18n.rs`            | The app's German translations, on top of the core's                                  |
+| `src/i18n.rs`            | The app's translations (all its German in `i18n/de.rs`), on top of the core's        |
 | `src/hits.rs`            | Clickable areas of the flyout, the settings and the statistics window                |
 | `src/stats_window.rs`    | The statistics window: pages, charts with tooltips, lists                            |
 | `src/sysmon.rs`          | The optional system monitor: CPU, memory, GPU, network and disk use                  |
@@ -926,7 +926,7 @@ The core, in `core/src/`:
 | `os/mod.rs`      | What it asks of the system; the clock, running and finding programs              |
 | `os/windows/`    | Windows: processes, local time, language, folder changes, HTTPS, TLS (SChannel)  |
 | `os/other.rs`    | Other systems, for now: fallbacks so the core builds and its tests run           |
-| `i18n.rs`        | English and German: the language, the core's translations                        |
+| `i18n.rs`        | English and German: the language; the core's German in `i18n/de.rs`              |
 | `stats.rs`       | Statistics from transcripts, prices, disk usage                                  |
 | `setup.rs`       | What a session loads: skills, MCP servers, instructions, memory, and their sizes |
 | `keep.rs`        | Kept statistics: sessions' numbers after Claude Code deletes their transcripts   |

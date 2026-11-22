@@ -246,20 +246,6 @@ pub fn countdowns(limits: [Option<Limit>; 2], at: u8, t: i64) -> [Option<String>
     })
 }
 
-/// German translations of this file's text (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("Your week: {0} prompts, {1} tokens", "Deine Woche: {0} Prompts, {1} Token"),
-    ("Your week: 1 prompt, {0} tokens", "Deine Woche: 1 Prompt, {0} Token"),
-    ("Weekly limit at {0} %", "Wochenlimit bei {0} %"),
-    ("Resets {0}", "Reset {0}"),
-    ("The weekly limit could run out early", "Das Wochenlimit könnte früher aufgebraucht sein"),
-    ("5-hour limit at {0} %", "5-Stunden-Limit bei {0} %"),
-    ("The weekly limit is free again", "Das Wochenlimit ist wieder frei"),
-    ("The 5-hour limit is free again", "Das 5-Stunden-Limit ist wieder frei"),
-    ("Weekly and 5-hour limits are free again", "Wochen- und 5-Stunden-Limit sind wieder frei"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

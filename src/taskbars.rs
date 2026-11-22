@@ -333,18 +333,6 @@ pub fn pick<'a>(displays: &'a [Display], mode: crate::settings::Taskbars, chosen
     if picked.is_empty() { displays.iter().filter(|d| d.main).take(1).collect() } else { picked }
 }
 
-/// German translations of the display names (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("Built-in display", "Eingebauter Bildschirm"),
-    ("Display", "Bildschirm"),
-    ("Main display", "Hauptbildschirm"),
-    ("Left of the main display", "Links vom Hauptbildschirm"),
-    ("Right of the main display", "Rechts vom Hauptbildschirm"),
-    ("Above the main display", "Über dem Hauptbildschirm"),
-    ("Below the main display", "Unter dem Hauptbildschirm"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

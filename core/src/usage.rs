@@ -207,17 +207,6 @@ fn model_limit(v: &Value, model: &str) -> Option<ModelLimit> {
     Some(ModelLimit { limit, share })
 }
 
-/// German translations of its messages (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("No Claude Code login found. Run `claude` and sign in.", "Keine Claude-Code-Anmeldung gefunden. Starte `claude` und melde dich an."),
-    ("Login expired. Using Claude Code renews it.", "Anmeldung abgelaufen. Claude Code zu benutzen erneuert sie."),
-    ("Rate limited, retrying later.", "Zu viele Anfragen, später neuer Versuch."),
-    ("Claude Code isn't used on this PC", "Claude Code wird auf diesem PC nicht benutzt"),
-    ("Usage request failed (HTTP {0}).", "Abfrage der Nutzung fehlgeschlagen (HTTP {0})."),
-    ("Unexpected response from the usage API.", "Unerwartete Antwort der Nutzungs-API."),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

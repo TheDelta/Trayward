@@ -127,23 +127,3 @@ pub fn show(owner: HWND, prefs: &Prefs, snoozed_until: Option<i64>, update: Opti
         _ => {}
     }
 }
-
-/// German translations of the right-click menu (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("Refresh now", "Jetzt aktualisieren"),
-    ("Display mode", "Darstellung"),
-    ("Normal", "Normal"),
-    ("Mute sounds", "Töne stumm"),
-    ("Settings…", "Einstellungen…"),
-    ("Exit", "Beenden"),
-    ("Snooze notifications", "Benachrichtigungen pausieren"),
-    ("Demo plan", "Demo-Plan"),
-    ("Snoozed until {0}: resume", "Pausiert bis {0}: fortsetzen"),
-    ("30 minutes", "30 Minuten"),
-    ("1 hour", "1 Stunde"),
-    ("2 hours", "2 Stunden"),
-    ("Until tomorrow morning", "Bis morgen früh"),
-    ("About Trayward", "Über Trayward"),
-    ("Version {0} is out: download", "Version {0} ist da: herunterladen"),
-];
