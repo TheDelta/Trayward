@@ -803,7 +803,7 @@ impl Layout<'_> {
         }
         if let (Some(c), Some((x, y, tip))) = (self.c, self.help_tip) {
             let pal = self.pal;
-            let text = self.g.wrapped(&tr(tip), 12.0, NORMAL, HELP_TIP_W - 24.0)?;
+            let text = self.g.wrapped(crate::help::shown(tip), 12.0, NORMAL, HELP_TIP_W - 24.0)?;
             let more = self.g.text(t("Click for the full help"), 11.0, NORMAL, None)?;
             let h = 12.0 + text.height + 6.0 + more.height + 10.0;
             // Below the "?", or above it when there's no room; inside the window.
