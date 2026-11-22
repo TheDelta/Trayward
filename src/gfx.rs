@@ -5,6 +5,7 @@
 use crate::theme::Color;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
@@ -70,8 +71,14 @@ const MAX_LAYOUTS: usize = 4000;
 #[derive(Clone)]
 pub struct Icon(IWICBitmapSource);
 
+// The drawing objects of a thread (factories, layers, render targets) are never released
+// when it ends (`ManuallyDrop`): Rust 1.85, the oldest Trayward builds with, runs
+// thread-local destructors under Windows' loader lock (newer ones run them as FLS
+// callbacks), where releasing Direct2D's, DirectWrite's and WIC's objects can
+// wait on another thread and hang the process. The app draws on its UI thread, which
+// lives as long as the process; tests draw on threads of their own.
 thread_local! {
-    static GFX: RefCell<Option<Rc<Gfx>>> = const { RefCell::new(None) };
+    static GFX: ManuallyDrop<RefCell<Option<Rc<Gfx>>>> = const { ManuallyDrop::new(RefCell::new(None)) };
 }
 
 #[cfg(test)]
@@ -728,7 +735,7 @@ impl Layer {
 
 thread_local! {
     /// The layers of the layered windows (the widgets), by window.
-    static LAYERS: RefCell<HashMap<isize, Layer>> = RefCell::new(HashMap::new());
+    static LAYERS: ManuallyDrop<RefCell<HashMap<isize, Layer>>> = ManuallyDrop::new(RefCell::new(HashMap::new()));
 }
 
 /// Renders a `w`×`h` pixel frame with per-pixel alpha and shows it on the
@@ -771,7 +778,8 @@ pub fn present_layered(hwnd: HWND, w: i32, h: i32, dpi: f32, draw: impl FnOnce(&
 
 thread_local! {
     /// Render targets of ordinary windows, kept between paints while they're visible.
-    static TARGETS: RefCell<HashMap<isize, ID2D1HwndRenderTarget>> = RefCell::new(HashMap::new());
+    static TARGETS: ManuallyDrop<RefCell<HashMap<isize, ID2D1HwndRenderTarget>>> =
+        ManuallyDrop::new(RefCell::new(HashMap::new()));
 }
 
 /// Paints an ordinary (not layered) window during WM_PAINT, `w`×`h` pixels,
@@ -848,11 +856,48 @@ pub fn forget_hidden() {
     });
 }
 
+/// For tests: drawing without a window.
+#[cfg(test)]
+pub mod testing {
+    use super::*;
+
+    /// Draws with `draw` into a `w`×`h` pixel image in memory at `dpi` (no window: the
+    /// same layer the widget draws into) and returns its pixels, 4 bytes each (BGRA,
+    /// premultiplied), rows top down.
+    pub fn offscreen(w: i32, h: i32, dpi: f32, draw: impl FnOnce(&Canvas)) -> Result<Vec<u8>> {
+        let g = get()?;
+        let layer = Layer::new(&g, w, h, dpi)?;
+        layer.draw(draw)?;
+        Ok(tests::pixels(&layer))
+    }
+
+    /// Whether anything was drawn: a pixel that isn't the cleared background.
+    pub fn drew(pixels: &[u8]) -> bool {
+        pixels.chunks_exact(4).any(|p| p.get(3).is_some_and(|&a| a > 2))
+    }
+
+    /// A program every Windows has, with an icon (Explorer), for drawing an app's icon.
+    pub fn system_exe() -> PathBuf {
+        let windows = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        windows.join("explorer.exe")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn pixels(layer: &Layer) -> Vec<u8> {
+    /// Tests draw the windows into memory: what's drawn shows, an empty frame doesn't.
+    #[test]
+    fn draws_without_a_window() {
+        let red = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+        let drawn = testing::offscreen(20, 10, 96.0, |c| c.fill_rect(0.0, 0.0, 5.0, 5.0, red)).unwrap();
+        assert_eq!(drawn.len(), 20 * 10 * 4);
+        assert!(testing::drew(&drawn));
+        assert!(!testing::drew(&testing::offscreen(20, 10, 96.0, |_| {}).unwrap()));
+    }
+
+    pub(super) fn pixels(layer: &Layer) -> Vec<u8> {
         let (w, h, _) = layer.made_for;
         // SAFETY: the bitmap is w×h pixels of 4 bytes, alive as long as the layer.
         unsafe {
@@ -886,5 +931,148 @@ mod tests {
         let px = pixels(&fresh);
         assert!(px.chunks(4).any(|p| p == [0, 0, 255, 255]));
         assert_eq!(px[px.len() - 4..], [0, 0, 0, 2]);
+    }
+
+    const RED: Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+    const BLUE: Color = Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
+
+    /// Whether `draw` puts anything into a small image.
+    fn draws(draw: impl FnOnce(&Canvas)) -> bool {
+        testing::drew(&testing::offscreen(64, 48, 96.0, draw).unwrap())
+    }
+
+    #[test]
+    fn draws_each_shape() {
+        assert!(draws(|c| c.fill_circle(10.0, 10.0, 5.0, RED)));
+        assert!(draws(|c| c.stroke_circle(10.0, 10.0, 5.0, 1.0, RED)));
+        assert!(draws(|c| c.stroke_round_rect(2.0, 2.0, 30.0, 20.0, 4.0, 1.0, BLUE)));
+        assert!(draws(|c| c.line(0.0, 0.0, 40.0, 30.0, 2.0, RED)));
+        assert!(draws(|c| c.clock(20.0, 20.0, 8.0, RED)));
+        assert!(draws(|c| c.glow(20.0, 20.0, 10.0, RED)));
+        let pts = [(0.0, 20.0), (10.0, 5.0), (20.0, 15.0), (40.0, 2.0)];
+        assert!(draws(|c| c.polyline(&pts, 1.5, BLUE)));
+        assert!(draws(|c| c.area(&pts, 30.0, 0.0, RED, BLUE.with_alpha(0.2))));
+        // No points: no line, no area.
+        assert!(!draws(|c| c.polyline(&[], 1.5, BLUE)));
+        assert!(!draws(|c| c.area(&[], 30.0, 0.0, RED, BLUE)));
+    }
+
+    #[test]
+    fn fills_paths_of_every_kind_of_segment() {
+        use Seg::{Close, Cubic, Line, Move};
+        // Two figures, the first closed by hand, the second by the next Move and at the end.
+        let shape = [
+            Move(0.0, 0.0),
+            Line(10.0, 0.0),
+            Cubic(12.0, 2.0, 12.0, 8.0, 10.0, 10.0),
+            Close,
+            Move(20.0, 0.0),
+            Line(30.0, 0.0),
+            Line(30.0, 10.0),
+            Move(40.0, 0.0),
+            Line(50.0, 10.0),
+            Line(40.0, 10.0),
+        ];
+        assert!(draws(|c| c.fill_path(&shape, 2.0, 2.0, 1.0, RED)));
+        // Segments before a Move belong to no figure and are left out.
+        assert!(!draws(|c| c.fill_path(
+            &[Line(10.0, 0.0), Cubic(1.0, 1.0, 2.0, 2.0, 3.0, 3.0), Close],
+            0.0,
+            0.0,
+            1.0,
+            RED
+        )));
+    }
+
+    #[test]
+    fn draws_text_in_every_way() {
+        let g = get().unwrap();
+        let t = g.text("Trayward 42%", 12.0, SEMIBOLD, None).unwrap();
+        assert!(t.width > 40.0 && t.height > 10.0);
+        // The same text and size: the same layout, from the cache.
+        assert_eq!(g.text("Trayward 42%", 12.0, SEMIBOLD, None).unwrap().width, t.width);
+        // Too wide: cut to fit, and the tests hear of it.
+        let cut = g.text("Trayward 42%", 12.0, SEMIBOLD, Some(30.0)).unwrap();
+        assert!(cut.width <= 30.0);
+        assert!(take_cut().contains(&"Trayward 42%".to_string()));
+        // Wrapped into lines: narrower and taller.
+        let wrapped = g.wrapped("one two three four five six seven", 12.0, NORMAL, 60.0).unwrap();
+        assert!(wrapped.width <= 60.0 && wrapped.height > 2.0 * t.height);
+        let gear = g.glyph('\u{E713}', 14.0).unwrap();
+        assert!(gear.width > 0.0);
+        assert!(draws(|c| c.text(&t, 2.0, 2.0, RED)));
+        assert!(draws(|c| c.text(&wrapped, 2.0, 2.0, RED)));
+        assert!(draws(|c| c.text(&gear, 2.0, 2.0, RED)));
+        assert!(draws(|c| c.text_rotated(&t, 2.0, 10.0, RED, 45.0)));
+        assert!(draws(|c| c.text_gradient(&t, 2.0, 2.0, RED, BLUE)));
+        assert!(draws(|c| c.text_stops(&t, 2.0, 2.0, &[(0.0, RED), (0.5, BLUE), (1.0, RED)])));
+        // No colours: nothing drawn.
+        assert!(!draws(|c| c.text_stops(&t, 2.0, 2.0, &[])));
+    }
+
+    #[test]
+    fn the_layout_cache_starts_over_when_full() {
+        let g = get().unwrap();
+        for i in 0..=MAX_LAYOUTS {
+            g.text(&i.to_string(), 9.0, NORMAL, None).unwrap();
+        }
+        assert!(g.layouts.borrow().len() <= MAX_LAYOUTS);
+        assert!(g.layouts.borrow().len() < 10);
+    }
+
+    #[test]
+    fn fades_clips_and_moves_what_it_draws() {
+        // Faded: drawn, but not opaque.
+        let px = testing::offscreen(20, 20, 96.0, |c| {
+            c.set_opacity(0.5);
+            c.fill_rect(0.0, 0.0, 20.0, 20.0, RED);
+            c.set_opacity(1.0);
+        })
+        .unwrap();
+        assert!(px.chunks(4).all(|p| p[3] > 2 && p[3] < 255));
+        // Clipped to nothing, then moved off the image: nothing shows.
+        assert!(!draws(|c| {
+            c.push_clip(0.0, 0.0, 0.0, 0.0);
+            c.fill_rect(0.0, 0.0, 64.0, 48.0, RED);
+            c.pop_clip();
+            c.set_offset(500.0, 500.0);
+            c.fill_rect(0.0, 0.0, 10.0, 10.0, RED);
+        }));
+    }
+
+    #[test]
+    fn loads_and_draws_an_app_icon() {
+        use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+        // SAFETY: COM for this test's thread, as the app's UI thread has it.
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        let g = get().unwrap();
+        let exe = testing::system_exe();
+        let icon = g.exe_icon(&exe).unwrap();
+        assert!(draws(|c| c.icon(&icon, 2.0, 2.0, 32.0)));
+        // Loaded once: the second time from the cache.
+        assert!(g.exe_icon(&exe).is_some());
+        assert!(g.exe_icon(Path::new("C:\\no such folder\\none.exe")).is_none());
+    }
+
+    #[test]
+    fn picks_an_installed_font() {
+        let g = get().unwrap();
+        // Nothing installed of the candidates: the last one.
+        assert_eq!(Gfx::pick_family(&g.dw, &["No Such Font 1", "No Such Font 2"]), "No Such Font 2");
+        assert_eq!(Gfx::pick_family(&g.dw, &["No Such Font", "Segoe UI"]), "Segoe UI");
+    }
+
+    /// Without a window, a frame is drawn but can't be shown; its layer goes
+    /// when the window is found hidden.
+    #[test]
+    fn a_frame_without_a_window_is_not_kept() {
+        let none = HWND::default();
+        assert!(present_layered(none, 40, 20, 96.0, |c| c.fill_rect(0.0, 0.0, 10.0, 10.0, RED)).is_err());
+        assert!(present_layered(none, 40, 20, 96.0, |c| c.fill_rect(0.0, 0.0, 10.0, 10.0, RED)).is_err());
+        assert!(LAYERS.with(|l| l.borrow().contains_key(&0)));
+        // Another size: a new layer.
+        assert!(present_layered(none, 30, 20, 120.0, |_| {}).is_err());
+        forget_hidden();
+        assert!(LAYERS.with(|l| l.borrow().is_empty()) && TARGETS.with(|t| t.borrow().is_empty()));
     }
 }

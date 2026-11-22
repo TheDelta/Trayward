@@ -2225,4 +2225,569 @@ mod tests {
         // Hidden rows keep their place in the list (hover indices stay the same).
         assert_eq!(top.hits.len(), scrolled.hits.len());
     }
+
+    /// Lays `m` out, then draws it into memory: the drawing has the layout's
+    /// height and hits, and shows something.
+    fn drawn(m: &Model, hover: Option<(usize, usize)>, v: &View) -> Layout {
+        let laid = render(None, m, hover, v).unwrap();
+        let mut out = None;
+        let px = gfx::testing::offscreen(WIDTH as i32, laid.height.ceil() as i32, 96.0, |c| {
+            out = Some(render(Some(c), m, hover, v).unwrap());
+        })
+        .unwrap();
+        assert!(gfx::testing::drew(&px));
+        let out = out.unwrap();
+        assert_eq!((out.height, out.hits.len()), (laid.height, laid.hits.len()));
+        out
+    }
+
+    /// Draws `m` with nothing hovered, then with each of its hits hovered in turn.
+    fn drawn_hovering_each(m: &Model, v: &View) -> Layout {
+        let l = drawn(m, None, v);
+        for (i, h) in l.hits.iter().enumerate() {
+            drawn(m, Some((i, h.tag)), v);
+        }
+        l
+    }
+
+    /// A week half used: days before today under, over and unknown, today
+    /// over its pace, a day without a budget, with a prediction.
+    fn week(used: f64) -> forecast::Plan {
+        let mut plan = forecast::plan(&[], used, NOW + 30 * 3600, NOW);
+        let today = plan.today;
+        let mut before = 0.0;
+        for (i, d) in plan.days.iter_mut().enumerate().take(today) {
+            d.budget = 12.0;
+            d.before = Some(before);
+            d.used = match i {
+                0 => Some(8.0),
+                1 => Some(20.0),
+                2 => None,
+                3 => Some(12.0),
+                _ => Some(0.5),
+            };
+            before += d.used.unwrap_or(0.0);
+        }
+        plan.days[today].budget = 10.0;
+        plan.days[today].used = Some(9.0);
+        plan.days[today].before = Some(before);
+        plan.today_used = Some(9.0);
+        plan.days[6].budget = 0.0;
+        // A day without a budget that used some, with no reading from before it.
+        if today > 4 {
+            (plan.days[4].budget, plan.days[4].before) = (0.0, None);
+        }
+        plan.pace = Some(9.5);
+        plan.this_week = true;
+        plan.past_pace = Some(7.0);
+        plan.at_reset = Some(120.0);
+        plan.full_at = Some(NOW + 20 * 3600);
+        plan
+    }
+
+    /// The session mailbox: one inbox with many senders, one with a message
+    /// without a sender, one with everything handled.
+    fn mail() -> crate::mailbox::Snapshot {
+        use crate::mailbox::{Inbox, Message, Snapshot};
+        let msg = |from: Option<&str>, topic: &str, ago: i64, reply: bool| Message {
+            path: PathBuf::from("message.md"),
+            from: from.map(str::to_string),
+            topic: topic.into(),
+            at: NOW - ago,
+            reply,
+        };
+        let mut busy = Vec::new();
+        for (i, from) in ["alpha", "beta", "gamma", "delta", "epsilon"].iter().enumerate() {
+            for j in 0..=(4 - i) {
+                busy.push(msg(Some(from), "deploy image access", 600 * (i + j) as i64, j % 2 == 1));
+            }
+        }
+        let inbox = |name: &str, unread: Vec<Message>, done| Inbox {
+            name: name.into(),
+            path: PathBuf::from(name),
+            unread_count: unread.len(),
+            unread,
+            done,
+            last_done: None,
+        };
+        Snapshot {
+            root: Some(PathBuf::from("mailbox")),
+            inboxes: vec![
+                inbox("infra", busy, 3),
+                inbox("shop", vec![msg(None, "a question", 60, false)], 0),
+                // More unread than were read.
+                Inbox { unread_count: 2, ..inbox("blog", Vec::new(), 0) },
+                inbox("docs", Vec::new(), 5),
+            ],
+        }
+    }
+
+    /// An extension with a row of each kind and state.
+    fn extension(changed: i64) -> crate::extensions::Extension {
+        use crate::extensions::{Extension, Row, State, Value};
+        let row = |label: &str, value, state| Row { label: label.into(), value, state };
+        Extension {
+            id: "backup".into(),
+            label: "Backup".into(),
+            description: String::new(),
+            tooltip: Vec::new(),
+            flyout: vec![
+                row("Photos", Value::Progress { fraction: 0.4, text: "40%".into() }, State::Plain),
+                row("Music", Value::Progress { fraction: 0.0, text: "0%".into() }, State::Warn),
+                row("Next run", Value::Time(NOW + 3600), State::Ok),
+                row("Last run", Value::Time(NOW - 3600), State::Bad),
+                row("Documents", Value::Text("Done".into()), State::Ok),
+            ],
+            stale_after: Some(600),
+            changed,
+        }
+    }
+
+    /// [`model`] with everything else the flyout can show: the mailbox, extensions
+    /// (one out of date), more merge requests, a week with a forecast.
+    fn full() -> Model {
+        let mut m = model();
+        m.weekly_plan = Some(week(46.0));
+        m.mailbox = Some(mail());
+        m.extensions = vec![extension(NOW - 10), extension(NOW - 7200)];
+        let change = |forge, number, draft, checks| forge::Change {
+            forge,
+            number,
+            title: "Make it faster".into(),
+            url: format!("https://example.com/{number}"),
+            project: "acme/shop".into(),
+            state: forge::State::Open,
+            draft,
+            checks,
+            updated: 0,
+        };
+        m.mine.extend([
+            change(forge::Forge::GitHub, 7, true, None),
+            change(forge::Forge::GitHub, 8, false, None),
+            change(forge::Forge::GitHub, 9, false, Some(forge::Checks::Passed)),
+            change(forge::Forge::GitLab, 10, false, Some(forge::Checks::Canceled)),
+            change(forge::Forge::GitLab, 11, false, Some(forge::Checks::Running)),
+            change(forge::Forge::GitLab, 12, false, None),
+        ]);
+        m
+    }
+
+    #[test]
+    fn draws_every_part_with_each_one_hovered_in_both_themes() {
+        for dark in [true, false] {
+            let m = Model { dark, ..full() };
+            let l = drawn_hovering_each(&m, &View::default());
+            // At most six of the user's requests; the mailbox's rows and the
+            // handled inboxes open their folders; extensions add nothing to click.
+            assert_eq!(l.hits.iter().filter(|h| (3000..4000).contains(&h.tag)).count(), 6);
+            let folders: Vec<&Action> =
+                l.hits.iter().map(|h| &h.action).filter(|a| matches!(a, Action::Folder(_))).collect();
+            assert_eq!(folders.len(), 3);
+            let days = l.hits.iter().filter(|h| matches!(h.action, Action::Day(_))).count();
+            assert!(days >= 6, "{days}");
+        }
+    }
+
+    #[test]
+    fn the_header_says_how_fresh_the_numbers_are() {
+        let base = Model { sessions: Vec::new(), ..model() };
+        for refresh in [Refresh::Ready, Refresh::Busy(90), Refresh::Resting] {
+            for updated_at in [Some(NOW - 60), None] {
+                let m = Model { refresh, updated_at, ..base.clone() };
+                let l = drawn(&m, None, &View::default());
+                // The refresh button comes first; hovered, it says what a click does.
+                assert_eq!(l.hits[0].action, Action::Refresh);
+                drawn(&m, Some((0, 0)), &View::default());
+            }
+        }
+        assert!(Refresh::Busy(0).is_busy() && !Refresh::Ready.is_busy() && !Refresh::Resting.is_busy());
+        // Each plan's look, and none.
+        for plan in [Some("Max 20x"), Some("Pro"), Some("Ultra"), None] {
+            for shine in [None, Some(0.5)] {
+                let m = Model { plan: plan.map(str::to_string), shine, ..base.clone() };
+                drawn(&m, None, &View::default());
+            }
+        }
+    }
+
+    #[test]
+    fn limits_show_in_every_state() {
+        let limit = |used, resets_at| Some(Limit { used, resets_at });
+        let base = Model { sessions: Vec::new(), gpg: None, codex: None, copilot: None, error: None, ..model() };
+        let height = |m: &Model| drawn(m, None, &View::default()).height;
+        let usual = height(&base);
+        // Nothing known yet: both limits without data.
+        let empty = Model { weekly: None, five_hour: None, fable: None, updated_at: None, ..base.clone() };
+        assert!(height(&empty) < usual);
+        // Ultra: no 5-hour limit, said at the end of the weekly line.
+        let ultra = Model { five_hour: None, ..base.clone() };
+        assert!(height(&ultra) < usual);
+        // A simulated 5-hour limit that hasn't started, one that reset, one without a reset.
+        for (five, simulated) in [
+            (limit(0.0, None), true),
+            (limit(31.0, Some(NOW - 10)), false),
+            (limit(31.0, None), false),
+            (limit(85.0, Some(NOW + 3600)), false),
+            (limit(97.0, Some(NOW + 3600)), true),
+        ] {
+            let m = Model { five_hour: five, five_hour_simulated: simulated, ..base.clone() };
+            assert_eq!(height(&m), usual);
+        }
+        // The weekly limit without its week's plan: a plain bar, red near the end;
+        // Fable's limit without its share.
+        let plain = Model {
+            weekly: limit(96.0, Some(NOW + 3600)),
+            weekly_plan: None,
+            fable: Some(crate::usage::ModelLimit { limit: Limit { used: 0.0, resets_at: None }, share: None }),
+            ..base.clone()
+        };
+        assert!(height(&plain) < usual);
+        // Claude Code not on this PC: none of its limits.
+        let no_claude = Model { claude: false, ..base.clone() };
+        assert!(height(&no_claude) < height(&empty));
+    }
+
+    #[test]
+    fn the_weekly_bar_shows_each_day_and_its_tip() {
+        let base = Model { sessions: Vec::new(), gpg: None, codex: None, copilot: None, error: None, ..model() };
+        let mut plans = Vec::new();
+        // On pace (green), over it (yellow), running out (red); the forecast in its variants.
+        plans.push(week(46.0));
+        let mut out = week(96.0);
+        out.days[1].used = Some(30.0);
+        plans.push(out);
+        let mut past = week(46.0);
+        past.this_week = false;
+        past.at_reset = Some(80.0);
+        past.full_at = None;
+        plans.push(past);
+        let mut even = week(46.0);
+        even.pace = None;
+        even.today_used = None;
+        plans.push(even);
+        let mut quiet = week(10.0);
+        (quiet.at_reset, quiet.full_at, quiet.past_pace) = (None, None, None);
+        plans.push(quiet);
+        // Today over its budget at its very end, on a week that's on pace.
+        let mut late = week(30.0);
+        let today = late.today;
+        late.elapsed = 0.3;
+        late.days[today].begin = NOW - 86_400;
+        late.days[today].end = NOW;
+        late.days[today].budget = 9.0;
+        late.days[today].used = Some(9.5);
+        plans.push(late);
+        // At its end, today at 95 % of its budget (yellow) and well within it (dim).
+        for budget in [9.5, 20.0] {
+            let mut close = week(30.0);
+            let today = close.today;
+            close.elapsed = 0.3;
+            close.days[today].begin = NOW - 86_400;
+            close.days[today].end = NOW;
+            close.days[today].budget = budget;
+            plans.push(close);
+        }
+        for plan in plans {
+            for style in [WeekBar::Days, WeekBar::Budgets] {
+                let m = Model {
+                    weekly_plan: Some(plan),
+                    week_bar: style,
+                    weekly: Some(Limit { used: plan.used, resets_at: Some(NOW + 30 * 3600) }),
+                    ..base.clone()
+                };
+                let l = drawn(&m, None, &View::default());
+                // Each day's tip, above the day when there's no room below it.
+                for (i, h) in l.hits.iter().enumerate().filter(|(_, h)| matches!(h.action, Action::Day(_))) {
+                    drawn(&m, Some((i, h.tag)), &View::default());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn day_tips_say_what_a_day_used() {
+        i18n::set(Choice::English);
+        let mut plan = week(46.0);
+        let today = plan.today;
+        let ink = |plan: &forecast::Plan, i: usize| day_tip(plan, i, "Day").2;
+        // A day still to come: what its budget will be (adaptive budgets), or nothing more.
+        if today < 6 {
+            assert_eq!(ink(&plan, 6).len(), 2);
+            plan.budget = forecast::Budget::Even;
+            assert_eq!(ink(&plan, 6).len(), 1);
+        }
+        // A day the readings don't tell.
+        assert_eq!(ink(&plan, 2)[1].1, Ink::Dim);
+        // Used just its budget: no "under" or "over".
+        assert_eq!(ink(&plan, 3)[1].0, "Used 12.0%");
+        // Today on an even week, and today ahead of it or behind it.
+        let lines = ink(&plan, today);
+        assert!(lines.iter().any(|(l, _)| l.starts_with("Week so far")), "{lines:?}");
+        for (used, elapsed) in [(46.0, 0.46), (40.0, 0.46), (60.0, 0.46)] {
+            plan.used = used;
+            plan.elapsed = elapsed;
+            assert!(ink(&plan, today).iter().any(|(l, _)| l.starts_with("Week so far")));
+        }
+        // A day before today that used its even share: the week on pace after it.
+        let (start, end) = (plan.days[0].begin, plan.days[6].end);
+        let d = &mut plan.days[0];
+        d.budget = 100.0 * (d.end - start) as f64 / (end - start) as f64;
+        (d.before, d.used) = (Some(0.0), Some(d.budget));
+        assert_eq!(ink(&plan, 0)[2], ("Week after this day: on pace".into(), Ink::Dim));
+    }
+
+    #[test]
+    fn session_rows_show_every_state() {
+        let base = Model { gpg: None, codex: None, copilot: None, error: None, mine: Vec::new(), ..model() };
+        let mut rows = Vec::new();
+        for (i, status) in [Status::NeedsInput, Status::Working, Status::Done, Status::Idle].into_iter().enumerate() {
+            for variant in 0..6 {
+                let mut r = row(i, status, false);
+                r.id = format!("s{i}-{variant}");
+                r.seen = variant % 2 == 1;
+                r.urgent = variant == 2;
+                r.archived = variant >= 4;
+                r.vscode = variant != 3;
+                r.pinned = variant == 1;
+                r.details = if variant == 5 { String::new() } else { r.details };
+                r.cache_left = [Some(3000), Some(120), Some(-5), None, Some(0), Some(59 * 60)][variant];
+                r.agents = variant % 3;
+                r.watching = (variant == 3).then(|| "Wait for the deploy".into());
+                r.context = match variant {
+                    1 => Some(crate::transcripts::Fill { share: 0.72, soon: false }),
+                    2 => Some(crate::transcripts::Fill { share: 0.95, soon: true }),
+                    _ => None,
+                };
+                r.change = match variant {
+                    0 => Some(ChangeLine { text: "!37 · Merged".into(), url: None, checks: None, merged: true }),
+                    3 => Some(ChangeLine {
+                        text: "#8 · Checks passed".into(),
+                        url: Some("https://example.com/8".into()),
+                        checks: Some(forge::Checks::Passed),
+                        merged: false,
+                    }),
+                    4 => Some(ChangeLine {
+                        text: "!9 · Pipeline failed".into(),
+                        url: Some("https://example.com/9".into()),
+                        checks: Some(forge::Checks::Failed),
+                        merged: false,
+                    }),
+                    5 => Some(ChangeLine {
+                        text: "!10 · open".into(),
+                        url: Some("https://example.com/10".into()),
+                        checks: Some(forge::Checks::Canceled),
+                        merged: false,
+                    }),
+                    _ => None,
+                };
+                rows.push(r);
+            }
+        }
+        // Other providers' sessions: Codex's without buttons, Copilot's with statistics only.
+        for (i, other) in [(0, "Codex"), (1, "Copilot")] {
+            for status in [Status::Working, Status::Idle] {
+                let mut r = row(i, status, true);
+                r.id = format!("{other}-{status:?}");
+                r.other = Some(other);
+                rows.push(r);
+            }
+        }
+        let n = rows.len();
+        let m = Model { sessions: rows, ..base };
+        let open = View { expanded: true, ..View::default() };
+        let l = drawn_hovering_each(&m, &open);
+        let rows_shown = l.hits.iter().filter(|h| matches!(h.action, Action::Session(_))).count();
+        assert_eq!(rows_shown, n);
+        // Only the pills with an address open something, and compact rows have none.
+        let pills =
+            l.hits.iter().filter(|h| matches!(&h.action, Action::Open(u) if u.starts_with("https://example.com/")));
+        let with_url = |r: &&SessionRow| r.status != Status::Idle && r.change.as_ref().is_some_and(|c| c.url.is_some());
+        assert_eq!(pills.count(), m.sessions.iter().filter(with_url).count());
+        // In a terminal or in VS Code, with its icon.
+        windows_com();
+        let with_icon = Model { vscode_exe: Some(gfx::testing::system_exe()), ..m };
+        let l = drawn(&with_icon, None, &open);
+        for (i, h) in l.hits.iter().enumerate().filter(|(_, h)| matches!(h.action, Action::Session(_))).step_by(5) {
+            drawn(&with_icon, Some((i, h.tag)), &open);
+        }
+    }
+
+    /// COM for this test's thread, which loading an icon needs (the app has it on its UI thread).
+    fn windows_com() {
+        use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
+        // SAFETY: plain initialisation of this thread; a second call just says so.
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    }
+
+    #[test]
+    fn the_list_scrolls_with_a_thumb_and_links() {
+        let mut m = Model { gpg: None, mine: Vec::new(), ..model() };
+        m.sessions = (0..20).map(|i| row(i % 4, if i < 10 { Status::Working } else { Status::Idle }, false)).collect();
+        for (i, r) in m.sessions.iter_mut().enumerate() {
+            r.id = format!("s{i}");
+        }
+        let open = View { expanded: true, list_max: Some(200.0), scroll: 300.0 };
+        let l = drawn_hovering_each(&m, &open);
+        // Rows out of view can't be clicked.
+        assert!(l.hits.iter().any(|h| matches!(h.action, Action::Session(_)) && h.h == 0.0));
+        drawn_hovering_each(&m, &View::default());
+        // Room for all of it: no thumb.
+        drawn(&m, None, &View { list_max: Some(10_000.0), ..open });
+        // Only idle sessions: "Recent" right at the top.
+        let idle =
+            Model { sessions: m.sessions.iter().filter(|r| r.status == Status::Idle).cloned().collect(), ..m.clone() };
+        drawn(&idle, None, &View::default());
+        // None at all.
+        let none = Model { sessions: Vec::new(), hidden: 1, tracking: tracking::State::Off, ..m.clone() };
+        let l = drawn_hovering_each(&none, &View::default());
+        assert!(l.hits.iter().any(|h| h.action == Action::UnhideAll));
+        assert!(l.hits.iter().any(|h| h.action == Action::EnableTracking));
+        let on = Model { tracking: tracking::State::On, hidden: 0, ..none };
+        assert!(
+            !drawn(&on, None, &View::default())
+                .hits
+                .iter()
+                .any(|h| matches!(h.action, Action::EnableTracking | Action::UnhideAll))
+        );
+    }
+
+    #[test]
+    fn the_gpg_key_says_how_long_it_stays_unlocked() {
+        let base = Model { sessions: Vec::new(), ..model() };
+        for gpg in [
+            Gpg { unlocked: true, left: Some(1200), total: 3600, at_least: true },
+            Gpg { unlocked: true, left: Some(60), total: 3600, at_least: false },
+            Gpg { unlocked: true, left: Some(0), total: 0, at_least: false },
+            Gpg { unlocked: true, left: None, total: 3600, at_least: false },
+            Gpg { unlocked: false, left: None, total: 3600, at_least: false },
+        ] {
+            let m = Model { gpg: Some(gpg), ..base.clone() };
+            let with = drawn(&m, None, &View::default()).height;
+            let without = drawn(&Model { gpg: None, ..m }, None, &View::default()).height;
+            assert!(with > without + 20.0);
+        }
+    }
+
+    #[test]
+    fn other_providers_show_their_limits() {
+        let base = Model { sessions: Vec::new(), gpg: None, ..model() };
+        let limit = |used, resets_at| Some(Limit { used, resets_at });
+        let codex = |weekly, five_hour, at| Codex { plan: None, weekly, five_hour, at };
+        let height =
+            |cx| drawn(&Model { codex: Some(cx), copilot: None, ..base.clone() }, None, &View::default()).height;
+        // A day old, with one limit; near the end of both; one reset, one without data.
+        let one = height(codex(limit(41.0, Some(NOW + 3600)), None, NOW - 86_400));
+        let two = height(codex(limit(85.0, Some(NOW + 3600)), limit(97.0, None), NOW));
+        assert!(two > one + 20.0, "{two} vs {one}");
+        assert_eq!(height(codex(limit(50.0, Some(NOW - 10)), None, NOW)), one);
+        assert_eq!(height(codex(None, limit(0.0, None), NOW)), one);
+        let copilot = Copilot {
+            plan: None,
+            label: "Premium requests".into(),
+            limit: Limit { used: 100.0, resets_at: Some(NOW + 40 * 86_400) },
+            at: NOW,
+        };
+        drawn(&Model { copilot: Some(copilot), codex: None, claude: false, ..base }, None, &View::default());
+    }
+
+    #[test]
+    fn the_mailbox_lists_inboxes_with_unread_messages() {
+        let base = Model { sessions: Vec::new(), gpg: None, codex: None, copilot: None, ..model() };
+        let height = |mailbox| drawn(&Model { mailbox, ..base.clone() }, None, &View::default()).height;
+        let without = height(None);
+        // Not found yet: left out.
+        assert_eq!(height(Some(crate::mailbox::Snapshot::default())), without);
+        i18n::set(Choice::English);
+        let all = mail();
+        let lines = sender_lines(&all.inboxes[0], NOW);
+        // Three messages per sender, the rest counted; the senders with the
+        // most first, until the tip has fourteen lines.
+        assert_eq!(lines.len(), 14);
+        assert_eq!(lines[0], ("alpha · 5 messages".into(), Ink::Warn));
+        assert_eq!(lines[4], ("   and 2 more".into(), Ink::Dim));
+        assert!(lines.iter().any(|(l, _)| l.starts_with("   Re: ")));
+        // One unread message; everything handled.
+        let mut one = mail();
+        one.inboxes.remove(0);
+        let mut handled = mail();
+        for inbox in &mut handled.inboxes {
+            inbox.unread.clear();
+            inbox.unread_count = 0;
+        }
+        let m = Model { mailbox: Some(handled.clone()), ..base.clone() };
+        let l = drawn_hovering_each(&m, &View::default());
+        assert!(l.hits.iter().any(|h| h.action == Action::Folder(PathBuf::from("mailbox"))));
+        assert!(height(Some(one)) > without);
+        // A mailbox without inboxes: just its heading.
+        let empty = crate::mailbox::Snapshot { root: Some(PathBuf::from("mailbox")), inboxes: Vec::new() };
+        assert!(height(Some(empty)) > without);
+        drawn_hovering_each(&Model { mailbox: Some(all), ..base }, &View::default());
+    }
+
+    #[test]
+    fn names_states_and_counts() {
+        i18n::set(Choice::English);
+        assert_eq!(agents_label(1), "1 agent");
+        assert_eq!(agents_label(3), "3 agents");
+        let all = [forge::Checks::Running, forge::Checks::Passed, forge::Checks::Failed, forge::Checks::Canceled];
+        let texts: Vec<&str> = [forge::Forge::GitLab, forge::Forge::GitHub]
+            .into_iter()
+            .flat_map(|f| all.map(|c| checks_text(f, c)))
+            .collect();
+        assert_eq!(texts.len(), 8);
+        assert!(texts.iter().all(|t| !t.is_empty()));
+        let pal = theme::palette(true);
+        assert_eq!(checks_color(pal, None, true), pal.plan_to);
+        assert_eq!(checks_color(pal, Some(forge::Checks::Canceled), false), pal.text_dim);
+        assert_eq!(cache_time(3000), "50m");
+        assert_eq!(cache_time(249), "4:09");
+        let m = model();
+        assert_eq!(summary(&m), "1 needs you · 2 working · 2 done · 1 idle");
+        let two = Model { sessions: vec![row(0, Status::NeedsInput, false), row(1, Status::NeedsInput, false)], ..m };
+        assert_eq!(summary(&two), "2 need you");
+    }
+
+    #[test]
+    fn the_window_scrolls_hovers_and_hits_without_showing() {
+        let mut f = Flyout::new();
+        // Without its window class (the app registers it when it starts): no window.
+        f.create();
+        assert!(f.hwnd.is_none());
+        assert!(!f.visible() && !f.just_hidden());
+        // Without a window, nothing shows.
+        f.show(model(), RECT::default(), 96, true);
+        assert!(!f.visible());
+        f.hide();
+        // Fits: no scrolling.
+        let m = model();
+        let (h, hits, view) = f.layout(&m, 10_000.0).unwrap();
+        assert!(h > 400.0 && view.list_max.is_none() && view.scroll == 0.0);
+        assert!(!f.wheel(-120));
+        // Doesn't fit: the session list scrolls, down and back up, never past its ends.
+        f.view.scroll = 1_000.0;
+        let (short, _, view) = f.layout(&m, 300.0).unwrap();
+        assert!(short < h && view.list_max.is_some());
+        assert!(view.scroll < 1_000.0);
+        f.view = view;
+        assert!(f.wheel(120));
+        assert!(f.wheel(-240));
+        assert!(f.view.scroll > 0.0);
+        f.set_expanded(true);
+        assert!(f.view.expanded && f.view.scroll == 0.0);
+        // The mouse over the refresh button: hovering something to click.
+        f.hits = hits;
+        f.scale = 1.5;
+        let r = &f.hits[0];
+        let (x, y) = (((r.x + 1.0) * 1.5) as i32, ((r.y + 1.0) * 1.5) as i32);
+        f.set_mouse(Some((x, y)));
+        assert!(f.hovering());
+        assert_eq!(f.hit(x, y), Some(Action::Refresh));
+        // Over a day of the weekly bar: hovered, but nothing to click.
+        let day = f.hits.iter().find(|h| matches!(h.action, Action::Day(_))).map(|h| (h.x + 1.0, h.y + 1.0)).unwrap();
+        f.set_mouse(Some(((day.0 * 1.5) as i32, (day.1 * 1.5) as i32)));
+        assert!(!f.hovering());
+        f.set_mouse(None);
+        assert!(!f.hovering());
+        assert_eq!(f.hit(-10, -10), None);
+    }
 }

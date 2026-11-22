@@ -409,6 +409,85 @@ mod tests {
     }
 
     #[test]
+    fn popups_beside_the_widget_and_in_a_small_work_area() {
+        let (w, h, m) = (300, 200, 12);
+        // The tooltip: right above, beside or below the widget, on each edge.
+        let work = rect(0, 0, 1920, 1032);
+        assert_eq!(place(Edge::Bottom, &rect(1500, 1036, 1700, 1076), &work, w, h, m, true), (1400, 820));
+        let work = rect(48, 0, 1920, 1080);
+        assert_eq!(place(Edge::Left, &rect(2, 800, 46, 980), &work, w, h, m, true), (60, 780));
+        let work = rect(0, 0, 1872, 1080);
+        assert_eq!(place(Edge::Right, &rect(1874, 900, 1918, 1075), &work, w, h, m, true), (1560, 868));
+        // A work area smaller than the popup: its top left corner wins.
+        let tiny = rect(0, 0, 100, 100);
+        assert_eq!(place(Edge::Bottom, &rect(0, 100, 50, 140), &tiny, w, h, m, false), (12, 0));
+        assert_eq!(place(Edge::Top, &rect(0, -40, 50, 0), &tiny, w, h, m, false), (12, 0));
+        assert_eq!(place(Edge::Left, &rect(-40, 0, 0, 50), &tiny, w, h, m, false), (0, 12));
+        assert_eq!(place(Edge::Right, &rect(100, 0, 140, 50), &tiny, w, h, m, false), (0, 12));
+        // Taskbars at the top and right take their room from the work area.
+        let screen = rect(0, 0, 1920, 1080);
+        let anchor = rect(1500, 4, 1700, 44);
+        assert_eq!(popup_edge(&anchor, &screen, &rect(0, 48, 1920, 1080)), Edge::Top);
+        assert_eq!(popup_edge(&anchor, &screen, &rect(0, 0, 1872, 1080)), Edge::Right);
+        // Auto-hiding at the top or the left.
+        assert_eq!(popup_edge(&anchor, &screen, &screen), Edge::Top);
+        assert_eq!(popup_edge(&rect(2, 500, 46, 700), &screen, &screen), Edge::Left);
+        assert!(Edge::Left.vertical() && Edge::Right.vertical() && !Edge::Top.vertical() && !Edge::Bottom.vertical());
+    }
+
+    /// The real displays, read but not changed: whatever there is, a popup
+    /// stays on one and every taskbar's display gets a name.
+    #[test]
+    fn reads_the_displays_there_are() {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
+        assert!(monitor_count() >= 1);
+        let found = list();
+        // The main taskbar first.
+        assert!(found.iter().skip(1).all(|t| !t.main));
+        for d in describe(&found) {
+            assert!(!d.id.is_empty() && !d.name.is_empty() && !d.detail.is_empty(), "{d:?}");
+        }
+        let anchor = rect(1500, 1036, 1700, 1076);
+        let (x, y) = popup(&anchor, 300, 200, 12, false);
+        let (bx, by) = popup(&anchor, 300, 200, 12, true);
+        assert!(x > -100_000 && y > -100_000 && bx > -100_000 && by > -100_000);
+        // SAFETY: a plain query.
+        let monitor = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) };
+        assert!(!gdi_name(monitor.0 as isize).is_empty());
+        assert_eq!(gdi_name(0), "");
+        // A strip along the bottom of the main display.
+        let mut mi = MONITORINFOEXW::default();
+        mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        // SAFETY: plain queries with a valid out-pointer.
+        let desktop = unsafe {
+            let _ = GetMonitorInfoW(monitor, &mut mi.monitorInfo);
+            windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow()
+        };
+        let screen = mi.monitorInfo.rcMonitor;
+        assert_eq!(edge(desktop, &rect(screen.left, screen.bottom - 48, screen.right, screen.bottom)), Edge::Bottom);
+        // Taskbars on the same display twice: numbered; the second one says where it is.
+        let main =
+            Taskbar { hwnd: HWND::default(), main: true, monitor: monitor.0 as isize, bounds: rect(0, 0, 1920, 1080) };
+        let other = Taskbar { main: false, bounds: rect(1920, 0, 3840, 1080), ..main };
+        let unknown = Taskbar { main: false, monitor: 0, bounds: rect(0, 1080, 1920, 2160), ..main };
+        let shown = describe(&[main, other, unknown]);
+        assert!(shown[0].name.ends_with(" (1)") && shown[1].name.ends_with(" (2)"), "{shown:?}");
+        assert!(shown[1].detail.ends_with("1920 × 1080") && shown[1].detail.len() > "1920 × 1080".len());
+        // A display Windows doesn't know: no id, but a name.
+        assert!(shown[2].id.is_empty() && !shown[2].name.is_empty());
+        assert!(shown[2].detail.ends_with("1920 × 1080"));
+    }
+
+    #[test]
+    fn reads_utf16_up_to_its_end() {
+        let buf: Vec<u16> = "DISPLAY1\0junk".encode_utf16().collect();
+        assert_eq!(utf16(&buf), "DISPLAY1");
+        let full: Vec<u16> = "DISPLAY2".encode_utf16().collect();
+        assert_eq!(utf16(&full), "DISPLAY2");
+    }
+
+    #[test]
     fn names_sides() {
         let main = RECT { left: 0, top: 0, right: 100, bottom: 100 };
         let at = |l, t| side(&RECT { left: l, top: t, right: l + 100, bottom: t + 100 }, &main);

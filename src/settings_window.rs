@@ -2908,4 +2908,569 @@ mod tests {
             )
         );
     }
+
+    /// Lays out and draws a page into memory, as the window paints it. What's drawn
+    /// has the same clickable areas and text fields as the layout without drawing.
+    fn draw(
+        m: &Model,
+        page: usize,
+        hover: Option<usize>,
+        form: Option<Form>,
+        select: Option<Select>,
+        mouse: Option<(f32, f32)>,
+    ) -> Drawn {
+        let laid_out = render(None, m, page, hover, form, select, mouse).unwrap();
+        let mut drawn = None;
+        let pixels = gfx::testing::offscreen(WIDTH as i32, HEIGHT as i32, 96.0, |c| {
+            drawn = Some(render(Some(c), m, page, hover, form, select, mouse).unwrap());
+        })
+        .unwrap();
+        assert!(gfx::testing::drew(&pixels), "page {page}: nothing drawn");
+        gfx::take_cut();
+        let drawn = drawn.unwrap();
+        let actions = |d: &Drawn| d.hits.iter().map(|h| h.action.clone()).collect::<Vec<_>>();
+        assert_eq!(actions(&drawn), actions(&laid_out), "page {page}");
+        assert_eq!(drawn.fields.len(), laid_out.fields.len(), "page {page}");
+        assert_eq!(drawn.top, laid_out.top, "page {page}");
+        drawn
+    }
+
+    /// Every page shown, by its index.
+    fn pages(m: &Model) -> Vec<usize> {
+        (0..PAGES.len()).filter(|&p| page_shown(p, &m.prefs)).collect()
+    }
+
+    /// Hosts of both tools: with Trayward's token (one running out soon), with
+    /// the tool's own login, without any.
+    fn tools() -> crate::forge::Tools {
+        use crate::forge::{Host, Tool, Tools};
+        let now = crate::win::now_ms() / 1000;
+        let host = |name: &str, ok, token, expires| Host { name: name.into(), ok, token, expires };
+        Tools {
+            glab: Tool {
+                found: true,
+                path: Some(r"C:\Tools\glab.exe".into()),
+                version: Some("glab 1.52.0".into()),
+                hosts: vec![
+                    host("gitlab.example.com", true, true, Some(now + 200 * 86_400)),
+                    host("git.example.org", true, true, Some(now + 3 * 86_400)),
+                ],
+            },
+            gh: Tool { found: true, path: None, version: None, hosts: vec![host("github.com", false, false, None)] },
+            asked: true,
+        }
+    }
+
+    #[test]
+    fn every_page_is_drawn_in_both_themes_and_languages() {
+        for lang in [Choice::English, Choice::German] {
+            i18n::set(lang);
+            for dark in [true, false] {
+                let m = Model { dark, ..model() };
+                for page in pages(&m) {
+                    draw(&m, page, None, None, None, None);
+                }
+            }
+        }
+        i18n::set(Choice::English);
+    }
+
+    #[test]
+    fn every_control_is_drawn_hovered() {
+        i18n::set(Choice::English);
+        let m = model();
+        for page in pages(&m) {
+            let hits = render(None, &m, page, None, None, None, None).unwrap().hits.len();
+            for hover in 0..hits {
+                draw(&m, page, Some(hover), None, None, None);
+            }
+        }
+        // The forms' controls too.
+        for (page, form) in [
+            (page::MQTT, Form::Broker { tls: false }),
+            (page::AWAY, Form::Push { service: crate::push::Service::Ntfy }),
+        ] {
+            let hits = render(None, &m, page, None, Some(form), None, None).unwrap().hits.len();
+            for hover in 0..hits {
+                draw(&m, page, Some(hover), Some(form), None, None);
+            }
+        }
+    }
+
+    #[test]
+    fn a_hovered_help_shows_its_short_text() {
+        i18n::set(Choice::English);
+        let m = model();
+        for page in pages(&m) {
+            let drawn = render(None, &m, page, None, None, None, None).unwrap();
+            // Each "?": a link to its part of the help page, its short text on hover.
+            for (i, hit) in drawn.hits.iter().enumerate() {
+                if matches!(&hit.action, Action::Open(url) if url.contains('#')) {
+                    let pixels = gfx::testing::offscreen(WIDTH as i32, HEIGHT as i32, 96.0, |c| {
+                        render(Some(c), &m, page, Some(i), None, None, None).unwrap();
+                    })
+                    .unwrap();
+                    let plain = gfx::testing::offscreen(WIDTH as i32, HEIGHT as i32, 96.0, |c| {
+                        render(Some(c), &m, page, None, None, None, None).unwrap();
+                    })
+                    .unwrap();
+                    assert_ne!(pixels, plain, "page {page}, hit {i}: no help shown");
+                    gfx::take_cut();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_language_list_opens_over_everything() {
+        i18n::set(Choice::English);
+        let m = model();
+        let drawn = draw(&m, page::GENERAL, None, None, Some(Select::Language), None);
+        // Its options come last, the only ones a click reaches.
+        let top = drawn.top.unwrap();
+        let options: Vec<_> = drawn.hits.get(top..).unwrap().iter().map(|h| h.action.clone()).collect();
+        use crate::i18n::Choice as Language;
+        assert_eq!(options, [Language::System, Language::English, Language::German].map(Action::Language).to_vec());
+        // Each option hovered, and the chosen one.
+        for hover in top..drawn.hits.len() {
+            draw(&m, page::GENERAL, Some(hover), None, Some(Select::Language), None);
+        }
+        let german = Model { prefs: Prefs { language: Language::German, ..model().prefs }, ..model() };
+        draw(&german, page::GENERAL, None, None, Some(Select::Language), None);
+        // Closed: no options on top.
+        assert!(draw(&m, page::GENERAL, None, None, None, None).top.is_none());
+    }
+
+    #[test]
+    fn a_description_cut_short_is_drawn_in_full_on_hover() {
+        i18n::set(Choice::English);
+        let long = "Not connected: No connection could be made because the target machine actively refused it, \
+                    again and again, for as long as anyone cared to try.";
+        let m = Model { mqtt_line: Some(Status::bad(long)), ..model() };
+        for form in [None, Some(Form::Broker { tls: true })] {
+            let drawn = render(None, &m, page::MQTT, None, form, None, None).unwrap();
+            gfx::take_cut();
+            let &(x, y, w, h) = drawn.tips.first().unwrap();
+            draw(&m, page::MQTT, None, form, None, Some((x + w / 2.0, y + h / 2.0)));
+        }
+        // On a card low on the page: above it.
+        let ext = Model {
+            forge_tools: crate::forge::Tools {
+                asked: true,
+                glab: crate::forge::Tool { found: true, ..Default::default() },
+                gh: crate::forge::Tool {
+                    found: true,
+                    hosts: (0..12)
+                        .map(|i| crate::forge::Host { name: format!("host-{i}.example.com"), ..Default::default() })
+                        .collect(),
+                    ..Default::default()
+                },
+            },
+            gpg_check: Some(crate::gpg::Check::Missing(crate::gpg::Missing::OtherFormat)),
+            prefs: Prefs { gpg_timer: true, ..model().prefs },
+            ..model()
+        };
+        let drawn = render(None, &ext, page::EXTENSIONS, None, None, None, None).unwrap();
+        gfx::take_cut();
+        for &(x, y, w, h) in &drawn.tips {
+            draw(&ext, page::EXTENSIONS, None, None, None, Some((x + w / 2.0, y + h / 2.0)));
+        }
+        assert!(!drawn.tips.is_empty());
+    }
+
+    #[test]
+    fn each_state_of_the_cards_is_drawn() {
+        use crate::gpg::{Check, Missing};
+        use crate::push::{Config, Service};
+        i18n::set(Choice::English);
+        let base = model();
+        let prefs = |p: Prefs| Model { prefs: p, ..model() };
+        let variants: Vec<(usize, Model)> = vec![
+            // General and Taskbar.
+            (page::GENERAL, Model { autostart: false, interval: 600, ..model() }),
+            (page::TASKBAR, Model { place: settings::Place::Widgets, widgets_button: false, ..model() }),
+            (page::TASKBAR, Model { place: settings::Place::Widgets, widgets_button: true, ..model() }),
+            (
+                page::TASKBAR,
+                Model { taskbars: Taskbars::All, more_monitors: false, bars: Bars::Never, solid: true, ..model() },
+            ),
+            (page::TASKBAR, Model { taskbars: Taskbars::Main, bars: Bars::Always, ..model() }),
+            (page::TASKBAR, prefs(Prefs { slim: true, turn_secs: 0, ..base.prefs.clone() })),
+            // The system monitor: off, and every value in its other way.
+            (
+                page::SYSTEM_MONITOR,
+                prefs(Prefs {
+                    monitor: settings::Monitor {
+                        on: true,
+                        cpu: true,
+                        ram: true,
+                        gpu: true,
+                        net: true,
+                        disk: true,
+                        graphs: false,
+                        ram_gb: true,
+                        gpu_memory: true,
+                        disk_rates: true,
+                    },
+                    ..base.prefs.clone()
+                }),
+            ),
+            (
+                page::EXTENSIONS,
+                prefs(Prefs {
+                    monitor: settings::Monitor { on: false, ..base.prefs.monitor },
+                    forge: false,
+                    gpg_timer: true,
+                    ..base.prefs.clone()
+                }),
+            ),
+            // Sessions: the hooks on, and off.
+            (page::SESSIONS, Model { tracking: tracking::State::On, ..model() }),
+            (
+                page::SESSIONS,
+                Model {
+                    tracking: tracking::State::Off,
+                    prefs: Prefs { transcripts: false, wsl: false, session_poll_secs: 10, ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            // Notifications: no sound, a file of one's own, muted, without merge requests.
+            (
+                page::NOTIFICATIONS,
+                prefs(Prefs {
+                    needs_sound: SoundChoice::Off,
+                    done_sound: SoundChoice::File(r"C:\Sounds\done.wav".into()),
+                    muted: true,
+                    forge: false,
+                    volume: settings::Volume::Loud,
+                    ..base.prefs.clone()
+                }),
+            ),
+            (
+                page::NOTIFICATIONS,
+                prefs(Prefs {
+                    needs_sound: SoundChoice::Builtin(3),
+                    done_sound: SoundChoice::File("done.wav".into()),
+                    ..base.prefs.clone()
+                }),
+            ),
+            // Limits, other choices.
+            (
+                page::LIMITS,
+                prefs(Prefs {
+                    warn_weekly: 0,
+                    countdown_at: 100,
+                    daily_budget: crate::forecast::Budget::Even,
+                    week_bar: crate::flyout::WeekBar::Budgets,
+                    ..base.prefs.clone()
+                }),
+            ),
+            // Providers: nothing found, Codex on with its choice, Copilot's limit failing.
+            (
+                page::PROVIDERS,
+                Model {
+                    claude_found: false,
+                    fable_found: false,
+                    codex_found: true,
+                    copilot_found: true,
+                    copilot_error: None,
+                    prefs: Prefs { codex: false, copilot: false, ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            (
+                page::PROVIDERS,
+                Model {
+                    prefs: Prefs {
+                        codex: true,
+                        copilot: true,
+                        copilot_limit: true,
+                        taskbar_shows: settings::Shown::Codex,
+                        ..base.prefs.clone()
+                    },
+                    ..model()
+                },
+            ),
+            (
+                page::PROVIDERS,
+                Model {
+                    copilot_found: true,
+                    prefs: Prefs { codex: false, copilot: true, copilot_limit: false, ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            // MQTT: nothing set yet, switched off, connected.
+            (
+                page::MQTT,
+                Model {
+                    mqtt_line: None,
+                    mqtt_password_set: false,
+                    prefs: Prefs { mqtt_broker: None, ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            (
+                page::MQTT,
+                Model {
+                    mqtt_line: Some(Status::new(Tone::Good, "✓ Connected to homeassistant.local")),
+                    prefs: Prefs { mqtt_broker: Some("mqtts://homeassistant.local:8884".into()), ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            // Away: an http:// address, an https:// one, none, a test under way.
+            (
+                page::AWAY,
+                Model {
+                    push_status: None,
+                    prefs: Prefs { push: Config::from_address("http://192.168.1.10/hook"), ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            (page::AWAY, Model { push_status: None, ..model() }),
+            (page::AWAY, Model { push_status: None, prefs: Prefs { push: None, ..base.prefs.clone() }, ..model() }),
+            (
+                page::AWAY,
+                Model {
+                    push_status: Some(Status::new(Tone::Busy, "Sending…")),
+                    prefs: Prefs { push: None, away_done: false, away_minutes: 30, ..base.prefs.clone() },
+                    ..model()
+                },
+            ),
+            // Mailbox: each state of its folder, few inboxes, none, switched off.
+            (page::MAILBOX, Model { mailbox_note: Some("Not a folder: x".into()), ..model() }),
+            (page::MAILBOX, Model { mailbox_folder: MailboxFolder::Searching(90), mailbox_inboxes: vec![], ..model() }),
+            (
+                page::MAILBOX,
+                Model {
+                    mailbox_folder: MailboxFolder::Found { path: r"W:\dev\.mailbox".into(), set: true },
+                    prefs: Prefs { mailbox_dir: Some(r"W:\dev\.mailbox".into()), ..base.prefs.clone() },
+                    // Unread, without knowing for how long.
+                    mailbox_inboxes: vec![InboxRow { waiting: None, unread: 3, ..base.mailbox_inboxes[1].clone() }],
+                    ..model()
+                },
+            ),
+            (page::MAILBOX, Model { mailbox_folder: MailboxFolder::Missing(Some(r"X:\gone".into())), ..model() }),
+            (page::MAILBOX, Model { mailbox_folder: MailboxFolder::Missing(None), ..model() }),
+            (page::EXTENSIONS, prefs(Prefs { mailbox: false, ..base.prefs.clone() })),
+            // The user's own extensions: none yet, and a few.
+            (page::OWN_EXTENSIONS, Model { extensions: crate::extensions::Snapshot::default(), ..model() }),
+            (
+                page::OWN_EXTENSIONS,
+                Model {
+                    // One without a description.
+                    extensions: crate::extensions::Snapshot {
+                        more: 0,
+                        files: vec![crate::extensions::File {
+                            name: "plain.json".into(),
+                            read: crate::extensions::parse(r#"{"version":1,"id":"plain","label":"Plain"}"#, 0),
+                        }],
+                        ..base.extensions.clone()
+                    },
+                    ..model()
+                },
+            ),
+            // About: no newer release, in each tone of the check.
+            (page::ABOUT, Model { update: None, ..model() }),
+            (page::ABOUT, Model { update: None, update_status: Status::new(Tone::Busy, "Checking…"), ..model() }),
+            (page::ABOUT, Model { update: None, update_status: Status::bad("Couldn't ask GitHub"), ..model() }),
+            (page::ABOUT, Model { update: None, update_status: Status::new(Tone::Plain, ""), ..model() }),
+            // GitLab and GitHub: hosts with and without tokens, a note on one, the tools missing.
+            (page::FORGE, Model { forge_tools: tools(), ..model() }),
+            (
+                page::FORGE,
+                Model {
+                    forge_tools: tools(),
+                    forge_note: Some(("gitlab.example.com".into(), Status::new(Tone::Busy, "Token saved, checking…"))),
+                    ..model()
+                },
+            ),
+            (
+                page::FORGE,
+                Model {
+                    forge_tools: crate::forge::Tools {
+                        asked: false,
+                        glab: crate::forge::Tool { hosts: tools().glab.hosts, ..Default::default() },
+                        ..Default::default()
+                    },
+                    ..model()
+                },
+            ),
+            (page::FORGE, prefs(Prefs { forge_flyout: false, forge_bubbles: true, ..base.prefs.clone() })),
+            (page::EXTENSIONS, Model { gpg_check: Some(Check::Ready { running: true, cached: true }), ..model() }),
+            (page::EXTENSIONS, Model { gpg_check: Some(Check::Missing(Missing::Key)), ..model() }),
+        ];
+        for (page, m) in &variants {
+            for dark in [true, false] {
+                draw(&Model { dark, ..m.clone() }, *page, None, None, None, None);
+            }
+        }
+        // The forms: each service, with and without what's saved for it.
+        let ntfy_token =
+            Config::Ntfy { server: "https://ntfy.example.org".into(), topic: "t".into(), token: Some("tk_x".into()) };
+        let gotify = Config::Gotify { server: "https://gotify.example.org".into(), token: "A1".into() };
+        let slack = Config::Slack { address: "https://hooks.slack.com/services/x".into() };
+        for saved in [Some(ntfy_token), Some(gotify), Some(slack), None] {
+            let m = prefs(Prefs { push: saved, ..base.prefs.clone() });
+            for service in Service::ALL {
+                let drawn = draw(&m, page::AWAY, None, Some(Form::Push { service }), None, None);
+                assert!(!drawn.fields.is_empty(), "{service:?}");
+            }
+        }
+        // The broker's form: nothing saved, a saved broker on another port.
+        for broker in [None, Some("mqtt://user@broker.local:1999".to_string())] {
+            let m = Model {
+                mqtt_password_set: false,
+                mqtt_line: None,
+                prefs: Prefs { mqtt_broker: broker.clone(), ..base.prefs.clone() },
+                ..model()
+            };
+            let drawn = draw(&m, page::MQTT, None, Some(Form::Broker { tls: false }), None, None);
+            let port = drawn.fields.iter().find(|f| f.id == Field::MqttPort).map(|f| f.text.clone());
+            assert_eq!(port.as_deref(), Some(if broker.is_some() { "1999" } else { "" }));
+        }
+        i18n::set(Choice::German);
+        for (page, m) in &variants {
+            draw(m, *page, None, None, None, None);
+        }
+        i18n::set(Choice::English);
+    }
+
+    #[test]
+    fn a_page_whose_extension_is_off_shows_the_extensions() {
+        i18n::set(Choice::English);
+        let off = Model { prefs: Prefs::defaults(), ..model() };
+        for page in [page::SYSTEM_MONITOR, page::FORGE, page::AWAY, page::MQTT, page::MAILBOX, page::OWN_EXTENSIONS] {
+            assert!(!page_shown(page, &off.prefs));
+            let drawn = draw(&off, page, None, None, None, None);
+            // The Extensions page's switches.
+            assert!(drawn.hits.iter().any(|h| h.action == Action::OwnExtensions), "{page}");
+        }
+        assert!(!page_shown(PAGES.len(), &off.prefs));
+        // Every extension on, with Taskbar's displays: the sidebar's rows closer together.
+        let m = model();
+        assert_eq!(pages(&m).len(), PAGES.len());
+        let rows = draw(&m, page::GENERAL, None, None, None, None)
+            .hits
+            .iter()
+            .filter(|h| matches!(h.action, Action::Page(_)))
+            .count();
+        assert_eq!(rows, PAGES.len());
+    }
+
+    #[test]
+    fn many_displays_are_drawn_in_columns() {
+        i18n::set(Choice::English);
+        for n in [1, 5, 9, 14, 30] {
+            let displays = (0..n).map(|i| (format!("d{i}"), format!("Display {i}"), "Somewhere · 2560 × 1440".into()));
+            let m = Model { displays: displays.collect(), chosen: vec!["d1".into(), "d3".into()], ..model() };
+            let drawn = draw(&m, page::TASKBAR, None, None, None, None);
+            assert_eq!(drawn.hits.iter().filter(|h| matches!(h.action, Action::Display(_))).count(), n);
+        }
+    }
+
+    #[test]
+    fn says_how_git_and_gpg_stand_in_every_case() {
+        use crate::gpg::{Check, Missing};
+        i18n::set(Choice::English);
+        let found = Some(Check::Found { git: true, gpg: false });
+        assert_eq!(gpg_status(false, found).text, "How long your key stays unlocked · GnuPG not found");
+        let ready = |running, cached| gpg_status(true, Some(Check::Ready { running, cached }));
+        assert_eq!(ready(false, true).text, "✓ git signs with GnuPG · gpg-agent not running");
+        assert_eq!(ready(true, true).text, "✓ git signs with GnuPG · key unlocked");
+        for why in
+            [Missing::Git, Missing::NotSigning, Missing::OtherFormat, Missing::GnuPg, Missing::Key, Missing::Agent]
+        {
+            let s = gpg_status(true, Some(Check::Missing(why)));
+            assert_eq!(s.tone, Tone::Warn, "{why:?}");
+            assert!(!s.text.is_empty());
+        }
+        // The two tools found, without a host to log in to: nothing to say but that.
+        let found = crate::forge::Tool { found: true, ..Default::default() };
+        let tools = crate::forge::Tools { glab: found.clone(), gh: found, asked: true };
+        let s = forge_status(true, &tools);
+        assert_eq!((s.tone, s.text.as_str()), (Tone::Plain, "glab found · gh found"));
+        // Not asked yet: a host says so.
+        let host = crate::forge::Host { name: "gitlab.example.com".into(), ..Default::default() };
+        let waiting = crate::forge::Tools { asked: false, ..tools };
+        let s = host_status(crate::forge::Forge::GitLab, &host, &waiting, 0);
+        assert_eq!((s.tone, s.text.as_str()), (Tone::Busy, "Checking…"));
+        // A tool a host needs but that isn't there: in yellow.
+        let needed = crate::forge::Tool { hosts: vec![host], ..Default::default() };
+        let s = tool_status(crate::forge::Forge::GitLab, &needed);
+        assert_eq!((s.tone, s.text.as_str()), (Tone::Warn, "Not found: winget install --id GLab.GLab"));
+        // A day with its year.
+        assert!(day_with_year(1_800_000_000).ends_with(" 2027"), "{}", day_with_year(1_800_000_000));
+    }
+
+    #[test]
+    fn each_tone_has_its_colour_and_removing_is_red() {
+        let pal = theme::palette(true);
+        let colors: Vec<Color> =
+            [Tone::Plain, Tone::Busy, Tone::Good, Tone::Warn, Tone::Bad].iter().map(|&t| tone_color(pal, t)).collect();
+        assert_eq!(colors, [pal.text_dim, pal.accent, pal.done, pal.warn, pal.crit]);
+        use crate::forge::Forge;
+        for action in
+            [Action::RemovePush, Action::RemoveBroker, Action::RemoveToken(Forge::GitHub, "github.com".into())]
+        {
+            assert!(destructive(&action));
+            assert_eq!(button_icon(&action), Some(BIN));
+        }
+        assert!(!destructive(&Action::TestPush));
+        assert_eq!(button_icon(&Action::TestPush), None);
+        assert_eq!(button_icon(&Action::Edit(Form::Broker { tls: true })), Some(PENCIL));
+        for action in [Action::PasteMailbox, Action::PasteForm, Action::PasteToken(Forge::GitLab, "x".into())] {
+            assert_eq!(button_icon(&action), Some(CLIPBOARD));
+        }
+        assert_eq!(Status::bad("x"), Status::new(Tone::Bad, "x"));
+    }
+
+    /// Without its window (never opened), the settings window keeps its state but
+    /// shows, finds and clicks nothing.
+    #[test]
+    fn without_a_window_nothing_is_shown() {
+        let mut w = SettingsWindow::new();
+        assert!(!w.visible() && !w.hovering());
+        w.retitle();
+        // The model is only taken for a window that shows it.
+        w.set_model(model());
+        assert!(w.model().is_none());
+        w.set_page(page::ABOUT);
+        assert_eq!(w.page, page::ABOUT);
+        w.set_page(PAGES.len());
+        assert_eq!(w.page, page::ABOUT);
+        w.set_form(Some(Form::Broker { tls: false }));
+        w.set_form(Some(Form::Broker { tls: false }));
+        assert_eq!(w.form, Some(Form::Broker { tls: false }));
+        // No fields on screen: nothing typed, nothing to fill.
+        assert_eq!(w.field_text(Field::MqttHost), "");
+        w.fill(&[(Field::MqttHost, "homeassistant.local".into())]);
+        assert_eq!(w.field_text(Field::MqttHost), "");
+        // The mouse over a description cut short: its tip, but no hit.
+        w.tips = vec![(10.0, 10.0, 50.0, 20.0)];
+        w.set_mouse(Some((20, 15)));
+        w.set_mouse(Some((21, 15)));
+        assert_eq!((w.tip, w.hover), (Some(0), None));
+        w.set_mouse(None);
+        assert_eq!(w.tip, None);
+        assert_eq!(w.click(20, 15), None);
+        // An open list closes on any click.
+        w.select = Some(Select::Language);
+        assert_eq!(w.click(20, 15), None);
+        assert!(w.select.is_none());
+        assert!(!w.close_select());
+        w.set_select(Some(Select::Language));
+        assert!(w.close_select());
+        w.close();
+        assert_eq!((w.form, w.select, w.hover), (None, None, None));
+    }
+
+    #[test]
+    fn the_window_is_as_big_as_its_client_area_and_frame() {
+        let (w, h) = SettingsWindow::window_size(96);
+        assert!(w >= WIDTH as i32 && h > HEIGHT as i32, "{w} × {h}");
+        let (w2, h2) = SettingsWindow::window_size(144);
+        assert!(w2 >= (WIDTH * 1.5) as i32 && h2 > h, "{w2} × {h2}");
+        // A window that isn't there: its scale is 1.
+        assert_eq!(scale_of(HWND::default()), 1.0);
+    }
 }

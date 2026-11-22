@@ -215,3 +215,83 @@ impl Bubble {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forge::Forge;
+
+    /// Lays `m` out and draws it into memory: the same size, and something shows.
+    fn drawn(m: &Model) -> (f32, f32) {
+        let size = render(None, m).unwrap();
+        let mut again = None;
+        let px = gfx::testing::offscreen(size.0.ceil() as i32, size.1.ceil() as i32, 96.0, |c| {
+            again = Some(render(Some(c), m).unwrap());
+        })
+        .unwrap();
+        assert!(gfx::testing::drew(&px));
+        assert_eq!(again, Some(size));
+        size
+    }
+
+    fn model(status: Status, badge: Option<Badge>) -> Model {
+        Model {
+            dark: true,
+            session_id: "s1".into(),
+            status,
+            urgent: false,
+            headline: "web-game is done".into(),
+            detail: "Fix the score board".into(),
+            badge,
+        }
+    }
+
+    #[test]
+    fn says_what_a_session_did() {
+        for dark in [true, false] {
+            for status in [Status::Done, Status::NeedsInput, Status::Working, Status::Idle] {
+                for urgent in [false, true] {
+                    let m = Model { dark, urgent, ..model(status, None) };
+                    let (w, h) = drawn(&m);
+                    assert!(w > 100.0 && h > 2.0 * PAD + 20.0, "{w} × {h}");
+                }
+            }
+        }
+        // A headline alone (a limit warning, the weekly summary, an update) is a line lower.
+        let full = drawn(&model(Status::Done, None));
+        let headline = drawn(&Model { detail: String::new(), ..model(Status::Done, None) });
+        assert!(headline.1 < full.1);
+        // Long text is cut at the bubble's width.
+        let long = Model { headline: "a very long headline ".repeat(20), ..model(Status::Done, None) };
+        assert!(drawn(&long).0 <= PAD + 16.0 + MAX_TEXT_W + PAD + 0.5);
+        assert!(!gfx::take_cut().is_empty());
+    }
+
+    #[test]
+    fn shows_pipeline_news_with_its_logo() {
+        for dark in [true, false] {
+            for forge in [Forge::GitLab, Forge::GitHub] {
+                for tone in [Tone::Success, Tone::Warn, Tone::Danger] {
+                    let badge = Badge { forge, tone, label: "Pipeline passed".into() };
+                    let m = Model { dark, headline: "!37 Faster search".into(), ..model(Status::Done, Some(badge)) };
+                    let (w, h) = drawn(&m);
+                    // Taller than a plain bubble: the state's pill sits under the title.
+                    assert!(h > drawn(&Model { badge: None, ..m.clone() }).1, "{w} × {h}");
+                    let bare = Model { detail: String::new(), ..m };
+                    assert!(drawn(&bare).0 < w);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn opens_and_closes_only_with_a_window() {
+        let mut b = Bubble::new();
+        // Without its window class (the app registers it when it starts): no window.
+        b.create();
+        b.show(model(Status::Done, None), RECT::default(), 120);
+        assert!(!b.visible() && b.hwnd.is_none());
+        b.hide();
+        assert!(!b.visible());
+    }
+}

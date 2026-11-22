@@ -804,7 +804,8 @@ impl Ui<'_> {
             c.text(&t, x + label_w + hr as f32 * (cell_w + gap), y + grid_h + 2.0, self.pal.text_dim);
         }
         if let Some((d, hr)) = cell {
-            let v = heat[d][hr];
+            // The grid is 7 × 24 by the core's making; anything else counts as nothing.
+            let v = heat.get(d).and_then(|row| row.get(hr)).copied().unwrap_or(0);
             let day = timefmt::weekday(A_MONDAY + d as i64 * DAY);
             let cx = x + label_w + hr as f32 * (cell_w + gap) + cell_w / 2.0;
             let what = match v {
@@ -4305,5 +4306,1089 @@ mod tests {
         crate::i18n::set(crate::i18n::Choice::English);
         assert_eq!(plural(1, "{0} file", "{0} files"), "1 file");
         assert_eq!(plural(2, "{0} file", "{0} files"), "2 files");
+    }
+
+    // ---------- every page, laid out and drawn ----------
+
+    use crate::setup::Chars;
+    use crate::stats::{
+        AgentRun, Call, ModelUse, Project, Prompt, Reply, Size, Stats, Summary, Tokens, TurnRow, Usage,
+    };
+    use std::sync::Arc;
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, HWND_MESSAGE};
+
+    /// Thursday 2026-11-12, 14:30 UTC: "now" for every page, so nothing depends on the clock.
+    const NOW: i64 = A_MONDAY + 3 * DAY + 2 * HOUR + 1800;
+
+    /// Eleven open sessions (more than the navigation lists), the demo's weekly limit readings.
+    fn model(dark: bool) -> Model {
+        let status = [Status::Working, Status::NeedsInput, Status::Done, Status::Idle];
+        Model {
+            dark,
+            now: NOW,
+            sessions: (0..11)
+                .map(|i| Entry {
+                    id: format!("s{i}"),
+                    title: format!("Session {i}"),
+                    workspace: if i == 2 { String::new() } else { "shop".into() },
+                    status: status[i % 4],
+                })
+                .collect(),
+            history: crate::demo::history(NOW),
+            weekly_reset: Some(NOW + 2 * DAY + 7 * HOUR),
+        }
+    }
+
+    /// A day and a bit of work in one project: prompts, replies of two models, reads and
+    /// edits (two files of the same name, one file written two ways), commands that fail,
+    /// a declined call, commits, agents and web lookups; what it loaded at the start.
+    fn transcript() -> Stats {
+        let mut s = Stats::default();
+        let start = NOW - 30 * HOUR;
+        s.cwd = Some(r"C:\dev\shop".into());
+        s.title = Some("Checkout: card payments".into());
+        s.models = vec!["claude-opus-5-5".into(), "claude-haiku-4-5-20251001".into()];
+        s.first_at = Some(start);
+        s.last_at = Some(NOW - 600);
+        let files = [
+            r"C:\dev\shop\src\ui\mod.rs",
+            r"C:\dev\shop\src\core\mod.rs",
+            r"C:\dev\shop\src\cart.rs",
+            "c:/dev/shop/src/cart.rs",
+        ];
+        let call = |at: i64, tool: &str, detail: &str| Call {
+            at,
+            tool: tool.into(),
+            detail: detail.into(),
+            ..Default::default()
+        };
+        for i in 0..40i64 {
+            let at = start + i * 45 * 60;
+            s.prompts.push(Prompt { at, text: format!("Prompt {i}: make the cart's total right") });
+            for (k, after) in [60, 300, 900 + i * 20].into_iter().enumerate() {
+                let tokens = Tokens {
+                    input: 5,
+                    cache_read: 20_000 + i as u64 * 3_000,
+                    cache_write: 1_500,
+                    output: 400 + 50 * k as u64,
+                    thinking: 100,
+                    ..Default::default()
+                };
+                s.replies.push(Reply { at: at + after, model: Some((k % 2) as u16), tokens, web: u32::from(k == 2) });
+            }
+            let file = files[(i % 4) as usize];
+            s.calls.push(Call { path: Some(file.into()), ..call(at + 120, "Read", "src/cart.rs") });
+            s.calls.push(Call {
+                path: Some(file.into()),
+                added: 12,
+                removed: 3,
+                ..call(at + 200, "Edit", "src/cart.rs")
+            });
+            let error = (i % 3 == 0).then(|| "error[E0308]: mismatched types ↵ Exit code 101".to_string());
+            s.calls.push(Call { error, ..call(at + 400, "Bash", "cd shop && cargo test") });
+            if i % 8 == 0 {
+                s.calls.push(call(at + 500, "Bash", "git commit -m \"Fix the total\""));
+                s.calls.push(call(at + 510, "Agent", "Find where the totals are computed"));
+                s.calls.push(call(at + 520, "WebFetch", "https://example.com/docs"));
+                let declined = Some("The user doesn't want to proceed with this tool use.".to_string());
+                s.calls.push(Call { error: declined, ..call(at + 530, "Bash", "rm -rf target") });
+                let failed = Some("File has not been read yet.".to_string());
+                s.calls.push(Call {
+                    path: Some(files[0].into()),
+                    error: failed,
+                    ..call(at + 540, "Write", "src/ui/mod.rs")
+                });
+            }
+        }
+        s.compactions = vec![start + 10 * HOUR, start + 20 * HOUR];
+        s.setup.known = true;
+        s.setup.skills = 4;
+        s.setup.mcp_servers = 2;
+        s.setup.mcp_tools = 15;
+        s.setup.agents = 3;
+        s.setup.instruction_files = 2;
+        s.setup.memory = true;
+        s.setup.chars =
+            Chars { system: 40_000, skills: 6_000, mcp: 9_000, agents: 2_000, instructions: 8_000, memory: 1_200 };
+        s
+    }
+
+    /// `n` subagents: of three types, some running, one without times or model.
+    fn agent_runs(n: usize) -> Vec<AgentRun> {
+        (0..n)
+            .map(|i| AgentRun {
+                description: format!("Agent task {i}"),
+                kind: ["Explore", "fork", ""][i % 3].into(),
+                running: i % 4 == 1,
+                first_at: (i != 2).then_some(NOW - HOUR + i as i64 * 60),
+                last_at: (i != 2).then_some(NOW - 600),
+                model: (i % 2 == 0).then(|| "Opus 5.5".to_string()),
+                output: 900 * i as u64,
+                context: 40_000,
+                tool_calls: 7,
+                errors: (i % 3) as u32,
+                cost: 0.12,
+            })
+            .collect()
+    }
+
+    fn models_used() -> Vec<ModelUse> {
+        vec![
+            ModelUse { name: "Opus 5.5".into(), output: 90_000, input: 3_000_000, replies: 80, cost: 12.5 },
+            ModelUse { name: "Haiku 4.5".into(), output: 9_000, input: 400_000, replies: 40, cost: 0.4 },
+        ]
+    }
+
+    /// A session's page data, with `agents` subagents.
+    fn session(id: &str, agents: usize) -> SessionData {
+        let stats = transcript();
+        let mut summary = stats.summary(i64::MIN, i64::MAX);
+        summary.agent_output = 54_000;
+        summary.agent_cost = 1.25;
+        let dir = PathBuf::from(r"C:\nowhere\.claude\projects\C--dev-shop");
+        let usage = |label: &str, path: PathBuf, bytes: u64, is_dir: bool| Usage {
+            label: label.into(),
+            path,
+            size: Size { bytes, files: bytes / 4000 + 1 },
+            dir: is_dir,
+        };
+        SessionData {
+            id: id.into(),
+            distro: None,
+            transcript: dir.join(format!("{id}.jsonl")),
+            kept: false,
+            context: stats.replies.iter().map(|r| (r.at, r.tokens.context())).collect(),
+            storage: vec![
+                usage("Transcript", dir.join(format!("{id}.jsonl")), 2_400_000, false),
+                usage("Subagent transcripts", dir.join(id).join("subagents"), 800_000, true),
+                usage("File history", dir.join("file-history"), 40_000, true),
+            ],
+            memory_files: Some(3),
+            agents: agent_runs(agents),
+            models: models_used(),
+            stats: Arc::new(stats),
+            summary,
+        }
+    }
+
+    /// `n` past sessions: in three projects (one Copilot's), some in WSL, archived, kept,
+    /// without times or size, with failures.
+    fn session_list(n: usize) -> Vec<SessionInfo> {
+        (0..n)
+            .map(|i| SessionInfo {
+                id: format!("s{i}"),
+                title: format!("Session {i} about the cart"),
+                project: ["shop", "infra", "docs · Copilot"][i % 3].into(),
+                distro: (i % 4 == 3).then(|| "Ubuntu".to_string()),
+                first_at: (i != 5).then_some(NOW - (i as i64 + 2) * DAY),
+                last_at: (i != 5).then_some(NOW - i as i64 * HOUR),
+                prompts: 3 * i as u32 + 1,
+                output: 10_000 * i as u64,
+                errors: (i % 3) as u32,
+                cost: 0.5 * i as f64,
+                size: Size { bytes: if i % 2 == 0 { 1_000_000 * i as u64 } else { 0 }, files: 2 },
+                archived: i % 3 == 1,
+                kept: i == 7,
+            })
+            .collect()
+    }
+
+    /// All sessions in `period`, with the period before to compare with: some numbers more,
+    /// some less, one the same.
+    fn overview(period: Period) -> Overview {
+        let t = transcript();
+        let mut summary = t.summary(i64::MIN, i64::MAX);
+        summary.agent_output = 54_000;
+        let previous = Summary {
+            prompts: summary.prompts,
+            replies: summary.replies / 2,
+            tool_calls: summary.tool_calls * 3,
+            turns: vec![60, 120],
+            ..Default::default()
+        };
+        let (bucket, n) = match period {
+            Period::Today => (HOUR, 15),
+            Period::Week => (DAY, 7),
+            Period::Month => (DAY, 30),
+            Period::All => (7 * DAY, 20),
+        };
+        let from = NOW - (n - 2) * bucket;
+        let buckets = (0..n)
+            .map(|i| {
+                let a = Activity {
+                    prompts: (i % 5) as u32,
+                    replies: (i % 7) as u32,
+                    output: 1_000 * (i % 4) as u64,
+                    agent_output: if i % 2 == 0 { 500 } else { 0 },
+                    tool_calls: i as u32,
+                    errors: (i % 2) as u32,
+                    cost: 0.1 * i as f64,
+                };
+                (from + i * bucket, a)
+            })
+            .collect();
+        let heat = (0..7)
+            .map(|d| {
+                let mut row = [0u32; 24];
+                for (h, v) in row.iter_mut().enumerate().skip(8).take(12) {
+                    *v = ((d + h) % 5) as u32;
+                }
+                row[7] = 1;
+                row
+            })
+            .collect();
+        let named = |names: &[&str]| -> Vec<(String, u32)> {
+            names.iter().enumerate().map(|(i, n)| (n.to_string(), 100 / (i as u32 + 1))).collect()
+        };
+        let turn = |i: i64| Turn { at: NOW - i * HOUR, secs: 3000 - i * 400, prompt: format!("Prompt {i}") };
+        Overview {
+            from,
+            to: NOW + 1,
+            sessions: 12,
+            summary,
+            active_hours: 31,
+            bucket,
+            buckets,
+            heat,
+            projects: (0..10)
+                .map(|i| Project { name: format!("project-{i}"), output: 100_000 / (i + 1), sessions: i as u32 + 1 })
+                .collect(),
+            tools: named(&["Read", "Edit", "Bash", "Grep", "Glob", "Write", "Agent", "WebFetch", "WebSearch", "Task"]),
+            models: models_used(),
+            commands: named(&["git", "cargo", "npm", "python", "rg", "ls", "cd", "node", "gh"]),
+            top: session_list(5),
+            longest: (0..4)
+                .map(|i| TurnRow { id: format!("s{i}"), title: format!("Session {i}"), turn: turn(i) })
+                .collect(),
+            failures: stats::failures(t.calls.iter()),
+            previous: Some(previous),
+            starts: (0..12).map(|i| (NOW - (12 - i) * DAY, 20_000 + i as u64 * 1_000)).collect(),
+            setup: Some((t.setup.clone(), 51_000)),
+            memory_files: 6,
+        }
+    }
+
+    fn files() -> Listing<FileRow> {
+        let mut items = stats::session_files(&transcript(), None);
+        items.push(FileRow {
+            path: "/home/me/shop/README.md".into(),
+            reads: 2,
+            last_at: NOW - 8 * DAY,
+            distro: Some("Ubuntu".into()),
+            ..Default::default()
+        });
+        Listing { title: "Last 7 days".into(), items }
+    }
+
+    /// The transcript's calls, newest first; with their session for a list of all sessions'.
+    fn calls(of_all: bool) -> Listing<CallRow> {
+        let session = of_all.then(|| ("s1".to_string(), "Checkout: card payments".to_string()));
+        let items =
+            transcript().calls.into_iter().rev().map(|call| CallRow { call, session: session.clone() }).collect();
+        Listing { title: "Checkout: card payments".into(), items }
+    }
+
+    /// Two config folders: one with more entries and projects than the page lists, one empty.
+    fn storage() -> Vec<Storage> {
+        let root = PathBuf::from(r"C:\nowhere\.claude");
+        let usage = |label: &str, bytes: u64, dir: bool| Usage {
+            label: label.into(),
+            path: root.join(label),
+            size: Size { bytes, files: bytes / 1000 + 1 },
+            dir,
+        };
+        let names = [
+            "projects",
+            "file-history",
+            "shell-snapshots",
+            "session-env",
+            "plugins",
+            "skills",
+            "todos",
+            "plans",
+            "cache",
+            "backups",
+            "debug",
+            "statsig",
+            "ide",
+            "sessions",
+            "history.jsonl",
+            "settings.json",
+            "something-else",
+        ];
+        vec![
+            Storage {
+                label: "Windows".into(),
+                dir: root.clone(),
+                total: Size { bytes: 9_000_000, files: 900 },
+                entries: names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| usage(n, 4_000_000 / (i as u64 + 1), !n.contains('.')))
+                    .collect(),
+                projects: (0..14).map(|i| usage(&format!("C--dev-p{i}"), 1_000_000 / (i + 1), true)).collect(),
+            },
+            Storage {
+                label: "WSL Ubuntu".into(),
+                dir: PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\.claude"),
+                total: Size::default(),
+                entries: vec![usage("projects", 0, true)],
+                projects: Vec::new(),
+            },
+        ]
+    }
+
+    /// Sixty weeks back from this one (into last year), one without tokens.
+    fn weeks() -> Vec<Week> {
+        let this = crate::alerts::week_of(NOW, &timefmt::offsets());
+        (0..60i64)
+            .map(|i| Week {
+                start: this - i * 7 * DAY,
+                sessions: (i % 3) as u32,
+                prompts: 10 * i as u32,
+                tokens: if i == 4 { 0 } else { 50_000 * (i as u64 % 7 + 1) },
+                cost: 1.5,
+                working: 3 * HOUR,
+            })
+            .collect()
+    }
+
+    /// Every page with its data, as the app computes it.
+    fn pages() -> Vec<(Page, Data)> {
+        let mut pages: Vec<(Page, Data)> =
+            Period::ALL.iter().map(|&p| (Page::Overview(p), Data::Overview(Box::new(overview(p))))).collect();
+        let project = Page::Project { name: "shop".into(), period: Period::Month };
+        pages.extend([
+            (project, Data::Overview(Box::new(overview(Period::Month)))),
+            (Page::Session("s1".into()), Data::Session(Box::new(session("s1", 14)))),
+            (Page::Session("s2".into()), Data::Session(Box::new(session("s2", 3)))),
+            (
+                Page::Calls { session: None, period: Period::Week, filter: Filter::All },
+                Data::Calls(Box::new(calls(true))),
+            ),
+            (
+                Page::Calls { session: Some("s1".into()), period: Period::All, filter: Filter::Failed },
+                Data::Calls(Box::new(calls(false))),
+            ),
+            (Page::Files { session: None, period: Period::Week }, Data::Files(Box::new(files()))),
+            (Page::Sessions { archived: None }, Data::Sessions(session_list(12))),
+            (Page::Sessions { archived: Some(true) }, Data::Sessions(session_list(12))),
+            (Page::Projects, Data::Projects(stats::projects(&session_list(12)))),
+            (Page::Storage, Data::Storage(storage())),
+            (Page::Weeks, Data::Weeks(weeks())),
+        ]);
+        pages
+    }
+
+    /// A view of `page` with `data`: at the top, nothing hovered.
+    fn view<'a>(m: &'a Model, page: &'a Page, data: &'a Data) -> View<'a> {
+        View {
+            m,
+            page,
+            data,
+            period: Period::Week,
+            back: false,
+            hover: None,
+            mouse: None,
+            scroll: 0.0,
+            search: "",
+            order: Order::default(),
+            copied: None,
+            progress: (0, 0),
+        }
+    }
+
+    /// Draws `views` one over the other into a frame in memory at `scale`; whether anything was drawn.
+    fn draw_at(views: &[View], scale: f32) -> bool {
+        let (w, h) = ((WIDTH * scale) as i32, (HEIGHT * scale) as i32);
+        let mut drawn = Ok(());
+        let pixels = gfx::testing::offscreen(w, h, 96.0 * scale, |c| {
+            for v in views {
+                if let Err(e) = render(Some(c), v) {
+                    drawn = Err(e);
+                }
+            }
+        })
+        .unwrap();
+        drawn.unwrap();
+        gfx::testing::drew(&pixels)
+    }
+
+    /// `v` as one sees it: laid out, then drawn from the top to the bottom, with each
+    /// clickable area and each chart under the mouse. Returns the layout.
+    fn exercise(v: &View) -> Layout {
+        let layout = render(None, v).unwrap();
+        let max = (layout.content_h - view_h()).max(0.0);
+        let near = |y: f32| (y - 120.0).clamp(0.0, max);
+        let mut views = Vec::new();
+        let mut scroll = 0.0;
+        loop {
+            views.push(View { scroll, ..*v });
+            if scroll >= max {
+                break;
+            }
+            scroll = (scroll + view_h() * 0.75).min(max);
+        }
+        for (i, h) in layout.hits.iter().enumerate() {
+            let scroll = if h.tag { near(h.y) } else { 0.0 };
+            views.push(View { hover: Some(i), mouse: Some((h.x + h.w / 2.0, h.y + h.h / 2.0 - scroll)), scroll, ..*v });
+        }
+        for z in &layout.zones {
+            let scroll = near(z[1]);
+            for (fx, fy) in [(0.02, 0.1), (0.5, 0.5), (0.98, 0.9), (0.3, 0.95)] {
+                let mouse = (z[0] + z[2] * fx, z[1] + z[3] * fy - scroll);
+                views.push(View { mouse: Some(mouse), scroll, ..*v });
+            }
+        }
+        assert!(draw_at(&views, 1.0), "{:?}: nothing drawn", v.page);
+        gfx::take_cut();
+        layout
+    }
+
+    fn has(layout: &Layout, action: &Action) -> bool {
+        layout.hits.iter().any(|h| h.action == *action)
+    }
+
+    fn count(layout: &Layout, pick: impl Fn(&Action) -> bool) -> usize {
+        layout.hits.iter().filter(|h| pick(&h.action)).count()
+    }
+
+    #[test]
+    fn every_page_is_laid_out_and_drawn_in_both_themes() {
+        i18n::set(i18n::Choice::English);
+        for dark in [false, true] {
+            let m = model(dark);
+            for (page, data) in pages() {
+                let v = view(&m, &page, &data);
+                // Light: every area hovered; dark: from the top to the bottom.
+                let layout = if dark {
+                    let layout = render(None, &v).unwrap();
+                    let bottom = View { scroll: (layout.content_h - view_h()).max(0.0), ..v };
+                    assert!(draw_at(&[View { back: true, ..v }, bottom], 1.0));
+                    layout
+                } else {
+                    exercise(&v)
+                };
+                // The navigation: five pages and the first nine open sessions.
+                let nav = count(&layout, |a| matches!(a, Action::Nav(_)));
+                assert_eq!(nav, 5 + NAV_SESSIONS, "{page:?}");
+                assert!(layout.content_h > 200.0, "{page:?}");
+                // Every list and overview but a session's can be saved as CSV.
+                let csv = !matches!(page, Page::Session(_));
+                assert_eq!(has(&layout, &Action::Export), csv, "{page:?}");
+            }
+        }
+        gfx::take_cut();
+    }
+
+    #[test]
+    fn the_overview_links_to_its_lists() {
+        i18n::set(i18n::Choice::English);
+        let m = model(false);
+        let page = Page::Overview(Period::Month);
+        let data = Data::Overview(Box::new(overview(Period::Month)));
+        let layout = render(None, &view(&m, &page, &data)).unwrap();
+        for p in Period::ALL {
+            assert!(has(&layout, &Action::Swap(Page::Overview(p))), "{p:?}");
+        }
+        let calls = |filter| Action::Go(Page::Calls { session: None, period: Period::Month, filter });
+        for action in [
+            calls(Filter::All),
+            calls(Filter::Failed),
+            calls(Filter::Tool("Grep".into())),
+            Action::Go(Page::Files { session: None, period: Period::Month }),
+            Action::Go(Page::Sessions { archived: None }),
+            Action::Go(Page::Project { name: "project-0".into(), period: Period::Month }),
+            Action::Go(Page::Session("s0".into())),
+        ] {
+            assert!(has(&layout, &action), "{action:?}");
+        }
+        // The projects card lists eight of ten; the tiles that explain themselves can be hovered.
+        assert_eq!(count(&layout, |a| matches!(a, Action::Go(Page::Project { .. }))), 8);
+        assert!(count(&layout, |a| *a == Action::Hover) >= 8);
+        // The charts follow the mouse: tokens per day, the weekly limit, starting context, the heatmap.
+        assert_eq!(layout.zones.len(), 4);
+
+        // A project's page doesn't link to all sessions' lists; its sessions lead to theirs.
+        let page = Page::Project { name: "shop".into(), period: Period::Month };
+        let layout = render(None, &view(&m, &page, &data)).unwrap();
+        assert!(!has(&layout, &calls(Filter::All)));
+        assert!(has(&layout, &Action::Swap(Page::Project { name: "shop".into(), period: Period::Today })));
+        assert!(has(&layout, &Action::Go(Page::Session("s0".into()))));
+        assert_eq!(layout.zones.len(), 3, "no weekly limit on a project's page");
+    }
+
+    #[test]
+    fn an_empty_period_says_so() {
+        i18n::set(i18n::Choice::English);
+        let mut m = model(false);
+        m.weekly_reset = None;
+        m.history.clear();
+        m.sessions.clear();
+        for page in [Page::Overview(Period::All), Page::Project { name: "shop".into(), period: Period::Week }] {
+            let data = Data::Overview(Box::new(Overview { bucket: DAY, heat: vec![[0; 24]; 7], ..Default::default() }));
+            let layout = exercise(&view(&m, &page, &data));
+            // No sessions open: only the pages in the navigation.
+            assert_eq!(count(&layout, |a| matches!(a, Action::Nav(_))), 5);
+            assert!(!has(&layout, &Action::Go(Page::Session("s0".into()))));
+        }
+        // Lists with nothing in them, and nothing found.
+        for (page, data, search) in [
+            (Page::Sessions { archived: None }, Data::Sessions(Vec::new()), ""),
+            (Page::Sessions { archived: None }, Data::Sessions(session_list(4)), "no such session"),
+            (Page::Projects, Data::Projects(Vec::new()), ""),
+            (Page::Weeks, Data::Weeks(Vec::new()), ""),
+            (Page::Storage, Data::Storage(Vec::new()), ""),
+            (
+                Page::Files { session: None, period: Period::Today },
+                Data::Files(Box::new(Listing { title: "Today".into(), items: Vec::new() })),
+                "",
+            ),
+            (
+                Page::Calls { session: None, period: Period::Today, filter: Filter::All },
+                Data::Calls(Box::new(Listing { title: "Today".into(), items: Vec::new() })),
+                "",
+            ),
+        ] {
+            let layout = exercise(&View { search, ..view(&m, &page, &data) });
+            assert!(layout.content_h < view_h(), "{page:?}");
+            assert_eq!(has(&layout, &Action::ClearSearch), !search.is_empty());
+        }
+    }
+
+    #[test]
+    fn says_how_far_reading_is() {
+        i18n::set(i18n::Choice::English);
+        let m = model(true);
+        for (page, data, progress) in [
+            (Page::Overview(Period::All), Data::Loading, (3, 10)),
+            (Page::Overview(Period::All), Data::Loading, (12, 10)),
+            (Page::Overview(Period::All), Data::Loading, (0, 0)),
+            (Page::Storage, Data::Loading, (0, 0)),
+            (Page::Session("s1".into()), Data::Loading, (0, 0)),
+            (Page::Session("s1".into()), Data::Missing, (0, 0)),
+            // Data of another page: nothing but the navigation.
+            (Page::Weeks, Data::Projects(Vec::new()), (0, 0)),
+        ] {
+            let v = View { progress, back: true, ..view(&m, &page, &data) };
+            let layout = render(None, &v).unwrap();
+            assert!(layout.content_h < 150.0, "{page:?}");
+            assert!(has(&layout, &Action::Back));
+            assert!(draw_at(&[v], 1.0));
+        }
+    }
+
+    #[test]
+    fn a_session_page_has_its_folders_and_the_command_that_resumes_it() {
+        i18n::set(i18n::Choice::English);
+        let m = model(false);
+        let page = Page::Session("s1".into());
+        let layout_of = |d: SessionData, order: Order, copied: Option<&str>| {
+            let data = Data::Session(Box::new(d));
+            let layout = render(None, &View { order, copied, ..view(&m, &page, &data) }).unwrap();
+            assert!(draw_at(&[View { order, copied, ..view(&m, &page, &data) }], 1.0));
+            layout
+        };
+        let resume = r"cd C:\dev\shop; claude --resume s1";
+        let layout = layout_of(session("s1", 14), Order::default(), None);
+        assert!(has(&layout, &Action::Copy(resume.into())));
+        assert!(has(&layout, &Action::Open(PathBuf::from(r"C:\dev\shop"))));
+        assert!(has(&layout, &Action::Open(PathBuf::from(r"C:\nowhere\.claude\projects\C--dev-shop"))));
+        assert!(has(&layout, &Action::Reveal(PathBuf::from(r"C:\nowhere\.claude\projects\C--dev-shop\s1.jsonl"))));
+        // Files it changed, by the names that tell them apart; the failed write changed nothing.
+        assert!(has(&layout, &Action::Reveal(PathBuf::from(r"C:\dev\shop\src\cart.rs"))));
+        assert!(has(&layout, &Action::Reveal(PathBuf::from(r"C:\dev\shop\src\ui\mod.rs"))));
+        // Twelve of fourteen agents: the link and the line under them show the rest.
+        assert_eq!(count(&layout, |a| *a == Action::AllAgents(true)), 2);
+        let all = layout_of(session("s1", 14), Order { all_agents: true, ..Order::default() }, Some(resume));
+        assert_eq!(count(&all, |a| *a == Action::AllAgents(false)), 1);
+        assert!(all.content_h > layout.content_h);
+        assert!(has(&all, &Action::Copy(resume.into())), "copied, the button stays");
+
+        // In WSL: a Linux path, quoted for its shell; Copilot's sessions resume with copilot.
+        let mut d = session("copilot:abc", 0);
+        d.distro = Some("Ubuntu".into());
+        let mut s = transcript();
+        s.cwd = Some("/home/me/my shop".into());
+        s.title = None;
+        s.models = vec!["gpt-5".into()];
+        s.setup = Default::default();
+        d.stats = Arc::new(s);
+        d.models.clear();
+        d.memory_files = None;
+        d.summary.agent_output = 0;
+        let layout = layout_of(d, Order::default(), None);
+        assert!(has(&layout, &Action::Copy("cd '/home/me/my shop'; copilot --resume abc".into())));
+        assert!(has(&layout, &Action::Open(PathBuf::from(r"\\wsl.localhost\Ubuntu\home\me\my shop"))));
+        assert_eq!(count(&layout, |a| matches!(a, Action::AllAgents(_))), 0);
+
+        // Kept statistics: its transcript is gone, so it can't be resumed or shown.
+        let mut d = session("s2", 0);
+        d.kept = true;
+        let mut s = Stats::default();
+        s.cwd = Some(r"C:\dev\shop".into());
+        d.stats = Arc::new(s);
+        d.context.clear();
+        d.storage.clear();
+        let layout = layout_of(d, Order::default(), None);
+        assert_eq!(count(&layout, |a| matches!(a, Action::Copy(_))), 0);
+        assert_eq!(count(&layout, |a| matches!(a, Action::Open(_))), 1, "only the project's folder");
+    }
+
+    #[test]
+    fn the_lists_filter_sort_and_search() {
+        i18n::set(i18n::Choice::English);
+        let m = model(false);
+        let rows = |page: &Page, data: &Data, search: &str, order: Order, pick: &dyn Fn(&Action) -> bool| {
+            let layout = render(None, &View { search, order, ..view(&m, page, data) }).unwrap();
+            count(&layout, pick)
+        };
+        let order = Order::default();
+        // All sessions, the archived ones, a search; every sort.
+        let sessions = Data::Sessions(session_list(12));
+        let row = |a: &Action| matches!(a, Action::Go(Page::Session(_)));
+        assert_eq!(rows(&Page::Sessions { archived: None }, &sessions, "", order, &row), 12);
+        assert_eq!(rows(&Page::Sessions { archived: Some(true) }, &sessions, "", order, &row), 4);
+        assert_eq!(rows(&Page::Sessions { archived: Some(false) }, &sessions, "", order, &row), 8);
+        assert_eq!(rows(&Page::Sessions { archived: None }, &sessions, "UBUNTU", order, &row), 3);
+        for s in SessionSort::ALL {
+            for desc in [true, false] {
+                let order = Order { sessions: s, sessions_desc: desc, ..order };
+                assert_eq!(rows(&Page::Sessions { archived: None }, &sessions, "", order, &row), 12);
+            }
+        }
+        // Files: every sort, a search.
+        let data = Data::Files(Box::new(files()));
+        let page = Page::Files { session: None, period: Period::Week };
+        let file = |a: &Action| matches!(a, Action::Reveal(_));
+        let all = rows(&page, &data, "", order, &file);
+        assert_eq!(all, 5, "four paths of the transcript (one file written two ways) and one in WSL");
+        assert_eq!(rows(&page, &data, "readme", order, &file), 1);
+        for s in FileSort::ALL {
+            let order = Order { files: s, files_desc: s != FileSort::Name, ..order };
+            assert_eq!(rows(&page, &data, "", order, &file), all);
+            exercise(&View { order, ..view(&m, &page, &data) });
+        }
+        // Projects: every sort.
+        let data = Data::Projects(stats::projects(&session_list(12)));
+        let project = |a: &Action| matches!(a, Action::Go(Page::Project { .. }));
+        for s in ProjectSort::ALL {
+            assert_eq!(rows(&Page::Projects, &data, "", Order { projects: s, ..order }, &project), 3);
+        }
+        // Tool calls: by tool, failed, one kind of failure, a search, oldest first.
+        let data = Data::Calls(Box::new(calls(true)));
+        let page = |filter| Page::Calls { session: None, period: Period::Week, filter };
+        let call = |a: &Action| matches!(a, Action::Go(Page::Session(_)));
+        let all = rows(&page(Filter::All), &data, "", order, &call);
+        assert_eq!(all, transcript().calls.len());
+        assert_eq!(rows(&page(Filter::Tool("Read".into())), &data, "", order, &call), 40);
+        assert_eq!(rows(&page(Filter::Failed), &data, "", order, &call), 14 + 5);
+        let oldest = Order { calls_oldest_first: true, ..order };
+        assert_eq!(rows(&page(Filter::All), &data, "git commit", oldest, &call), 5);
+        let failures = stats::failures(transcript().calls.iter());
+        let sig = failures.first().map(|f| f.signature.clone()).unwrap();
+        assert_eq!(rows(&page(Filter::Error(sig.clone())), &data, "", order, &call), 14);
+        let layout = exercise(&view(&m, &page(Filter::Error(sig.clone())), &data));
+        // The selected kind of failure, clicked again, lists all failures again.
+        assert!(has(&layout, &Action::Swap(page(Filter::Failed))));
+        exercise(&View { search: "cargo", order: oldest, ..view(&m, &page(Filter::Failed), &data) });
+        // A session's calls: no session to open, each call explained on hover.
+        let data = Data::Calls(Box::new(calls(false)));
+        let page = Page::Calls { session: Some("s1".into()), period: Period::All, filter: Filter::All };
+        let layout = render(None, &view(&m, &page, &data)).unwrap();
+        assert_eq!(count(&layout, call), 0);
+        assert!(count(&layout, |a| *a == Action::Hover) >= transcript().calls.len());
+    }
+
+    #[test]
+    fn a_long_list_shows_its_start() {
+        i18n::set(i18n::Choice::English);
+        let m = model(false);
+        let row = CallRow {
+            call: Call { at: NOW, tool: "Read".into(), ..Default::default() },
+            session: Some(("s".into(), "S".into())),
+        };
+        let data = Data::Calls(Box::new(Listing { title: "All time".into(), items: vec![row; MAX_ROWS + 5] }));
+        let page = Page::Calls { session: None, period: Period::All, filter: Filter::All };
+        let layout = render(None, &view(&m, &page, &data)).unwrap();
+        assert_eq!(count(&layout, |a| matches!(a, Action::Go(Page::Session(_)))), MAX_ROWS);
+        let bottom = View { scroll: layout.content_h - view_h(), ..view(&m, &page, &data) };
+        assert!(draw_at(&[view(&m, &page, &data), bottom], 1.0));
+        let file = FileRow { path: r"C:\a\b.rs".into(), edits: 1, ..Default::default() };
+        let data = Data::Files(Box::new(Listing { title: "All time".into(), items: vec![file; MAX_ROWS + 1] }));
+        let page = Page::Files { session: None, period: Period::All };
+        assert_eq!(
+            count(&render(None, &view(&m, &page, &data)).unwrap(), |a| matches!(a, Action::Reveal(_))),
+            MAX_ROWS
+        );
+        let data = Data::Sessions(vec![session_list(1).remove(0); MAX_ROWS + 1]);
+        let page = Page::Sessions { archived: None };
+        assert_eq!(count(&render(None, &view(&m, &page, &data)).unwrap(), |a| matches!(a, Action::Go(_))), MAX_ROWS);
+    }
+
+    #[test]
+    fn draws_at_150_percent_and_in_german() {
+        let m = model(true);
+        let page = Page::Overview(Period::Week);
+        let data = Data::Overview(Box::new(overview(Period::Week)));
+        i18n::set(i18n::Choice::English);
+        assert!(draw_at(&[view(&m, &page, &data)], 1.5));
+        i18n::set(i18n::Choice::German);
+        for (page, data) in pages() {
+            i18n::take_untranslated();
+            let v = view(&m, &page, &data);
+            let layout = render(None, &v).unwrap();
+            assert!(draw_at(&[View { scroll: (layout.content_h - view_h()).max(0.0), ..v }, v], 1.0));
+            // What a session's storage is called comes from elsewhere: it's translated too.
+            assert_eq!(i18n::take_untranslated(), Vec::<String>::new(), "{page:?}");
+        }
+        // The navigation and the messages fit, in German too.
+        let mut m = model(false);
+        m.sessions.truncate(2);
+        gfx::take_cut();
+        for data in [Data::Missing, Data::Loading] {
+            let page = Page::Session("s1".into());
+            assert!(draw_at(&[View { back: true, ..view(&m, &page, &data) }], 1.0));
+            assert_eq!(gfx::take_cut(), Vec::<String>::new());
+        }
+        i18n::set(i18n::Choice::English);
+    }
+
+    #[test]
+    fn helpers_for_charts_and_rows() {
+        i18n::set(i18n::Choice::English);
+        // Bucket labels and titles of hours, days and weeks.
+        assert_eq!(bucket_label(NOW, HOUR, 1, 15), "");
+        assert!(!bucket_label(NOW, HOUR, 3, 15).is_empty());
+        assert!(!bucket_label(NOW, DAY, 2, 7).is_empty());
+        assert!(!bucket_label(NOW, DAY, 29, 30).is_empty());
+        assert_eq!(bucket_label(NOW, DAY, 28, 30), "");
+        assert!(!bucket_label(NOW, 7 * DAY, 19, 20).is_empty());
+        assert!(bucket_title(NOW, HOUR).contains('–'));
+        assert!(bucket_title(NOW, 7 * DAY).starts_with("Week of"));
+        assert!(!bucket_title(NOW, DAY).is_empty());
+        let a =
+            Activity { prompts: 1, replies: 2, output: 1_000, agent_output: 500, tool_calls: 3, errors: 1, cost: 0.5 };
+        let lines = activity_lines(&a);
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].contains("by agents"), "{lines:?}");
+        assert_eq!(lines[1], "1 prompt · 2 replies");
+        assert_eq!(lines[2], "3 tool calls · 1 failed");
+        assert_eq!(activity_lines(&Activity { output: 10, ..Default::default() }).len(), 2);
+        // A time shows its date once it's more than six days ago.
+        assert!(when(NOW - 7 * DAY, NOW).len() > when(NOW - HOUR, NOW).len());
+        assert_eq!(percent(None), "–");
+        assert_eq!(percent(Some(0.25)), "25%");
+        assert_eq!(counted(["fork", "Explore", "fork", ""].into_iter()), "fork ×2 · Explore");
+        for name in ["projects", "history.jsonl", "settings.json", "todos"] {
+            assert!(storage_label(name).is_some(), "{name}");
+        }
+        assert_eq!(storage_label("something-else"), None);
+        assert_eq!(local_path("/home/me", None), PathBuf::from("/home/me"));
+        assert_eq!(local_path(r"C:\a", Some(&"Ubuntu".to_string())), PathBuf::from(r"C:\a"));
+        // A session's agents summed up; kept statistics have only their replies' numbers.
+        let rows = agent_rows(&session("s1", 5));
+        let labels: Vec<&str> = rows.iter().map(|r| r.0).collect();
+        assert_eq!(labels, ["Started", "Types", "Models", "Ran for", "Longest", "Tokens written", "API value"]);
+        assert!(rows[0].1.contains("running"), "{rows:?}");
+        let mut kept = session("s1", 0);
+        assert_eq!(agent_rows(&kept).len(), 2);
+        kept.summary.agent_output = 0;
+        assert!(agent_rows(&kept).is_empty());
+        let mut setup = transcript().setup;
+        assert_eq!(setup_rows(&setup)[1].1, "2 · 15 tools");
+        setup.mcp_tools = 0;
+        assert_eq!(setup_rows(&setup)[1].1, "2");
+        // What a session's page works out: the files by the names that tell them apart.
+        let tallies = session_tallies(&transcript());
+        let names: Vec<&str> = tallies.changed.iter().map(|c| c.0.as_str()).collect();
+        assert_eq!(names, ["cart.rs", "core/mod.rs", "ui/mod.rs"]);
+        assert_eq!(tallies.changed[0].1, 20.0, "one file however its path is written");
+        assert_eq!(tallies.turns.len(), 5);
+        assert!(tallies.failures.len() <= 5);
+        assert_eq!(tallies.tools.first().map(|t| t.0.as_str()), Some("Bash"));
+        // Explorer isn't even started for a path it shouldn't get.
+        explore(Path::new("calc.exe"), true);
+    }
+
+    #[test]
+    fn every_list_saves_as_csv() {
+        i18n::set(i18n::Choice::English);
+        let order = Order::default();
+        let csv_of = |page: &Page, data: &Data| export(page, data, "", &order, NOW);
+        for (page, data, name, header) in [
+            (
+                Page::Overview(Period::Week),
+                Data::Overview(Box::new(overview(Period::Week))),
+                "overview-7-days",
+                "start,",
+            ),
+            (
+                Page::Project { name: "C:\\my shop".into(), period: Period::Week },
+                Data::Overview(Box::new(overview(Period::Week))),
+                "project-c--my-shop",
+                "model,",
+            ),
+            (
+                Page::Calls { session: None, period: Period::Week, filter: Filter::All },
+                Data::Calls(Box::new(calls(true))),
+                "tool-calls",
+                "time,",
+            ),
+            (
+                Page::Calls { session: Some("s1".into()), period: Period::All, filter: Filter::Failed },
+                Data::Calls(Box::new(calls(false))),
+                "tool-calls",
+                "time,",
+            ),
+            (Page::Files { session: None, period: Period::Week }, Data::Files(Box::new(files())), "files", "path,"),
+            (Page::Sessions { archived: Some(false) }, Data::Sessions(session_list(6)), "sessions", "id,"),
+            (Page::Projects, Data::Projects(stats::projects(&session_list(6))), "projects", "project,"),
+            (Page::Weeks, Data::Weeks(weeks()), "weeks", "week_start,"),
+            (Page::Storage, Data::Storage(storage()), "storage", "where,"),
+        ] {
+            let (file, text) = csv_of(&page, &data).unwrap();
+            assert!(file.starts_with(&format!("trayward-{name}-")), "{file}");
+            assert!(file.ends_with(".csv") && !file.contains(':'), "{file}");
+            assert!(text.starts_with(&format!("\u{FEFF}{header}")), "{name}");
+            assert!(text.lines().count() > 2, "{name}: {text}");
+        }
+        // The failed calls of a session, with the session's title for each.
+        let page = Page::Calls { session: Some("s1".into()), period: Period::All, filter: Filter::Failed };
+        let (_, text) = csv_of(&page, &Data::Calls(Box::new(calls(false)))).unwrap();
+        assert_eq!(text.lines().count(), 1 + 14 + 5);
+        assert!(text.contains("Checkout: card payments,Bash,cd shop && cargo test"));
+        // A page without a list, or data that isn't the page's.
+        assert_eq!(csv_of(&Page::Session("s1".into()), &Data::Session(Box::new(session("s1", 0)))), None);
+        assert_eq!(csv_of(&Page::Weeks, &Data::Loading), None);
+    }
+
+    /// A message-only window of a system class: never shown, gone with the test.
+    struct Hidden(HWND);
+
+    impl Drop for Hidden {
+        fn drop(&mut self) {
+            // SAFETY: the window this test made, on this thread.
+            let _ = unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    fn hidden() -> Hidden {
+        // SAFETY: plain window creation of a system class, under the message-only parent.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                None,
+                None,
+            )
+        };
+        Hidden(hwnd.unwrap())
+    }
+
+    /// Where on the window (pixels) the first area of the page that `pick` takes is, scrolled into view.
+    fn spot(w: &mut StatsWindow, pick: impl Fn(&Action) -> bool) -> (i32, i32) {
+        let s = scale_of(w.hwnd.unwrap());
+        let i = w.layout.hits.iter().position(|h| pick(&h.action)).expect("no such area");
+        let h = w.layout.hits[i].clone();
+        if h.tag {
+            w.scroll = (h.y - 100.0).max(0.0);
+        }
+        let y = h.y + h.h / 2.0 - if h.tag { w.scroll } else { 0.0 };
+        let px = (((h.x + h.w / 2.0) * s).round() as i32, (y * s).round() as i32);
+        assert_eq!(w.find(w.dips(px.0, px.1).unwrap()), Some(i), "{:?} is under another area", h.action);
+        px
+    }
+
+    fn click(w: &mut StatsWindow, pick: impl Fn(&Action) -> bool) -> Option<Command> {
+        let (x, y) = spot(w, pick);
+        w.click(x, y)
+    }
+
+    #[test]
+    fn the_window_follows_clicks_typing_and_scrolling() {
+        i18n::set(i18n::Choice::English);
+        let window = hidden();
+        let mut w = StatsWindow::new();
+        // Without a window, nothing to show or click.
+        w.set_model(model(false));
+        assert!(w.model.is_none());
+        assert_eq!(w.click(10, 10), None);
+        w.retranslate();
+        w.hwnd = Some(window.0);
+        w.set_model(model(false));
+        w.set_model(model(false));
+        assert!(!w.visible());
+        assert_eq!(w.overview(), Page::Overview(Period::Week));
+        let load = |w: &mut StatsWindow, data: Data| {
+            let key = w.page.data_key();
+            w.set_data(&key, data);
+        };
+        load(&mut w, Data::Overview(Box::new(overview(Period::Week))));
+        // Data of another page comes too late: it's left out.
+        w.set_data(&Page::Weeks, Data::Weeks(weeks()));
+        assert!(matches!(w.data, Data::Overview(_)));
+
+        // Another period: read again.
+        let month = Page::Overview(Period::Month);
+        assert_eq!(click(&mut w, |a| *a == Action::Swap(month.clone())), Some(Command::Load(month.clone())));
+        assert_eq!(w.overview(), month);
+        load(&mut w, Data::Overview(Box::new(overview(Period::Month))));
+        match click(&mut w, |a| *a == Action::Export) {
+            Some(Command::Export { name, csv }) => {
+                assert!(name.starts_with("trayward-overview-30-days-"), "{name}");
+                assert!(csv.contains("tokens_written"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // Into the tool calls, and back.
+        let calls = Page::Calls { session: None, period: Period::Month, filter: Filter::All };
+        assert_eq!(click(&mut w, |a| *a == Action::Go(calls.clone())), Some(Command::Load(calls.clone())));
+        load(&mut w, Data::Calls(Box::new(self::calls(true))));
+        assert!(has(&w.layout, &Action::Back));
+        // A filter needs no new data.
+        let failed = Page::Calls { session: None, period: Period::Month, filter: Filter::Failed };
+        assert_eq!(click(&mut w, |a| *a == Action::Swap(failed.clone())), None);
+        assert_eq!(w.page, failed);
+        assert_eq!(click(&mut w, |a| *a == Action::CallsOldestFirst(true)), None);
+        assert!(w.order.calls_oldest_first);
+        // Typing searches; a click on the cross, Esc or backspace clear it.
+        w.type_text("car\u{7}ts");
+        assert_eq!(w.search, "carts");
+        assert!(w.backspace());
+        assert_eq!(w.search, "cart");
+        assert_eq!(click(&mut w, |a| *a == Action::ClearSearch), None);
+        assert_eq!(w.search, "");
+        assert!(!w.backspace());
+        assert!(!w.clear_search());
+        w.type_text(&"x".repeat(SEARCH_CHARS + 50));
+        assert_eq!(w.search.chars().count(), SEARCH_CHARS);
+        w.type_text("more");
+        assert_eq!(w.search.chars().count(), SEARCH_CHARS);
+        assert!(w.clear_search());
+        // A call's session opens it.
+        assert_eq!(
+            click(&mut w, |a| *a == Action::Go(Page::Session("s1".into()))),
+            Some(Command::Load(Page::Session("s1".into())))
+        );
+        assert_eq!(w.back(), Some(Command::Load(calls.clone())), "the filter's data");
+        assert_eq!(click(&mut w, |a| *a == Action::Back), Some(Command::Load(month.clone())));
+        assert_eq!(w.back(), None);
+
+        // All sessions: sorting, the archived ones, a session's page.
+        let sessions = Page::Sessions { archived: None };
+        assert_eq!(click(&mut w, |a| *a == Action::Nav(sessions.clone())), Some(Command::Load(sessions.clone())));
+        load(&mut w, Data::Sessions(session_list(60)));
+        assert!(!has(&w.layout, &Action::Back));
+        assert_eq!(click(&mut w, |a| *a == Action::SortSessions(SessionSort::Prompts)), None);
+        assert_eq!((w.order.sessions, w.order.sessions_desc), (SessionSort::Prompts, true));
+        assert_eq!(click(&mut w, |a| *a == Action::SortSessions(SessionSort::Prompts)), None);
+        assert!(!w.order.sessions_desc);
+        assert_eq!(click(&mut w, |a| *a == Action::SortSessions(SessionSort::Title)), None);
+        assert!(!w.order.sessions_desc, "titles start A to Z");
+        let archived = Page::Sessions { archived: Some(true) };
+        assert_eq!(click(&mut w, |a| *a == Action::Swap(archived.clone())), None);
+        // Scrolling glides there, and stops at the end.
+        let max = (w.layout.content_h - view_h()).max(0.0);
+        assert!(max > 0.0);
+        w.wheel(-120);
+        assert_eq!(w.target, WHEEL_STEP);
+        for _ in 0..40 {
+            w.tick();
+        }
+        assert_eq!(w.scroll, WHEEL_STEP);
+        w.scroll_by(1e6);
+        assert_eq!(w.target, max);
+        w.scroll_by(1e6);
+        w.wheel(i16::MAX);
+        assert_eq!(w.target, 0.0);
+        assert_eq!(StatsWindow::page_height(), view_h() - 80.0);
+        // The mouse: on a row, on nothing.
+        let (x, y) = spot(&mut w, |a| matches!(a, Action::Go(Page::Session(_))));
+        w.set_mouse(Some((x, y)));
+        assert!(w.hovering());
+        w.set_mouse(Some((5, 5)));
+        assert!(!w.hovering());
+        w.set_mouse(None);
+        let row = |a: &Action| matches!(a, Action::Go(Page::Session(_)));
+        let Some(Command::Load(Page::Session(id))) = click(&mut w, row) else { panic!("no session opened") };
+        load(&mut w, Data::Session(Box::new(session(&id, 14))));
+
+        // A session's page: its folders, the resume command, its agents.
+        assert!(matches!(click(&mut w, |a| matches!(a, Action::Copy(_))), Some(Command::Copy(_))));
+        assert!(w.copied.is_some());
+        assert!(matches!(click(&mut w, |a| matches!(a, Action::Open(_))), Some(Command::Open(_))));
+        assert!(matches!(click(&mut w, |a| matches!(a, Action::Reveal(_))), Some(Command::Reveal(_))));
+        assert_eq!(click(&mut w, |a| *a == Action::AllAgents(true)), None);
+        assert!(w.order.all_agents);
+        assert_eq!(click(&mut w, |a| *a == Action::AllAgents(false)), None);
+        assert_eq!(click(&mut w, |a| *a == Action::Hover), None);
+        // A chart under the mouse is drawn again as it moves.
+        let zone = w.layout.zones[0];
+        let s = scale_of(window.0);
+        w.scroll = (zone[1] - 100.0).max(0.0);
+        let at = |fx: f32| (((zone[0] + zone[2] * fx) * s) as i32, ((zone[1] + zone[3] / 2.0 - w.scroll) * s) as i32);
+        let (a, b) = (at(0.3), at(0.6));
+        w.set_mouse(Some(a));
+        assert!(w.in_zone);
+        w.set_mouse(Some(b));
+        w.set_mouse(None);
+        assert!(!w.in_zone);
+        w.paint(window.0);
+
+        // Projects, a project's page, files, storage, weeks.
+        assert_eq!(click(&mut w, |a| *a == Action::Nav(Page::Projects)), Some(Command::Load(Page::Projects)));
+        load(&mut w, Data::Projects(stats::projects(&session_list(12))));
+        assert_eq!(click(&mut w, |a| *a == Action::SortProjects(ProjectSort::Name)), None);
+        assert_eq!((w.order.projects, w.order.projects_desc), (ProjectSort::Name, false));
+        assert_eq!(click(&mut w, |a| *a == Action::SortProjects(ProjectSort::Name)), None);
+        assert!(w.order.projects_desc);
+        let project = |a: &Action| matches!(a, Action::Go(Page::Project { .. }));
+        assert!(matches!(click(&mut w, project), Some(Command::Load(Page::Project { .. }))));
+        let files = Page::Files { session: None, period: Period::Week };
+        w.go(files.clone(), false);
+        load(&mut w, Data::Files(Box::new(self::files())));
+        assert_eq!(click(&mut w, |a| *a == Action::SortFiles(FileSort::Name)), None);
+        assert_eq!((w.order.files, w.order.files_desc), (FileSort::Name, false));
+        assert_eq!(click(&mut w, |a| *a == Action::SortFiles(FileSort::Name)), None);
+        assert!(w.order.files_desc);
+        w.type_text("cart");
+        assert!(matches!(click(&mut w, |a| matches!(a, Action::Reveal(_))), Some(Command::Reveal(_))));
+        assert_eq!(click(&mut w, |a| *a == Action::Nav(Page::Storage)), Some(Command::Load(Page::Storage)));
+        assert_eq!(w.search, "", "a search stays with its list");
+        // Clicking the page shown again reads it again.
+        assert_eq!(click(&mut w, |a| *a == Action::Nav(Page::Storage)), Some(Command::Load(Page::Storage)));
+        load(&mut w, Data::Storage(storage()));
+        assert!(matches!(click(&mut w, |a| matches!(a, Action::Open(_))), Some(Command::Open(_))));
+        w.type_text("nothing to search here");
+        assert_eq!(w.search, "");
+        assert_eq!(click(&mut w, |a| *a == Action::Nav(Page::Weeks)), Some(Command::Load(Page::Weeks)));
+        load(&mut w, Data::Weeks(weeks()));
+        assert!(matches!(click(&mut w, |a| *a == Action::Export), Some(Command::Export { .. })));
+        // The page under the mouse, with nothing at the click.
+        assert_eq!(w.click(-50, -50), None);
+
+        // The window's size: at most the screen's height; the page scrolls in what's left.
+        let (width, height) = StatsWindow::window_size(96, 100_000);
+        assert!(width >= WIDTH as i32 && height >= HEIGHT as i32);
+        assert_eq!(view_h(), HEIGHT);
+        assert_eq!(StatsWindow::window_size(96, 500).1, 500);
+        assert!(view_h() < HEIGHT);
+        StatsWindow::window_size(96, 100_000);
+        assert_eq!(view_h(), HEIGHT);
+
+        w.retranslate();
+        w.close();
+        assert_eq!(w.data, Data::Loading);
+        assert!(w.layout.hits.is_empty());
+        assert!(!w.hovering());
     }
 }

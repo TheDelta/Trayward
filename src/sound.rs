@@ -253,6 +253,28 @@ mod tests {
         assert!(quiet_hours_profile().is_some());
     }
 
+    /// Each sound is rendered once and kept: Windows plays it from that memory.
+    #[test]
+    fn keeps_each_rendered_sound() {
+        let a = builtin(Kind::NeedsYou, 2, Volume::Quiet);
+        assert_eq!(a.get(..4), Some(&b"RIFF"[..]));
+        assert!(std::ptr::eq(a, builtin(Kind::NeedsYou, 2, Volume::Quiet)));
+        assert!(!std::ptr::eq(a, builtin(Kind::NeedsYou, 2, Volume::Loud)));
+        // Every kind has three named, described sounds.
+        for kind in [Kind::NeedsYou, Kind::Done] {
+            assert!(names(kind).iter().chain(descriptions(kind).iter()).all(|s| !s.is_empty()));
+        }
+    }
+
+    /// Whether to wait is asked of Windows (either answer is fine); off plays nothing.
+    #[test]
+    fn asks_whether_to_be_quiet() {
+        let _ = quiet();
+        let _ = do_not_disturb();
+        play(Kind::Done, &SoundChoice::Off, Volume::Medium, true);
+        play(Kind::Done, &SoundChoice::Off, Volume::Medium, false);
+    }
+
     #[test]
     fn quiet_is_quieter_than_loud() {
         let max = |v| synthesize(Kind::Done, 1, v).iter().map(|s| i32::from(*s).abs()).max().unwrap();

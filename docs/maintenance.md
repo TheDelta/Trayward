@@ -266,7 +266,13 @@ false` on every checkout that doesn't push; top-level `permissions` minimal,
   made relative to the repository); the SonarQube job takes it from the same run and
   makes its paths absolute, and passes the report's own path as an absolute one: the scanner
   makes a module of each Cargo package (the app, the core) and looks for the report from each
-  module's folder, so the core got none. It runs for `main` and for pull
+  module's folder, so the core got none. "Lint and checks" runs the release scripts' tests
+  again under coverage.py and uploads `coverage-python` (Cobertura XML) for it too.
+  **Coverage** aims at 80 % overall, Sonar's bar for new code: the windows are laid out
+  and drawn in tests into memory (`gfx::testing::offscreen`, no window). Left out of it,
+  with the reason in `sonar-project.properties`: `app.rs` (event handling and window
+  procedures), the Win32 glue that only runs with real windows (`win.rs`, `edit.rs`,
+  `menu.rs`, `uia.rs`, `main.rs`) and HTTPS/TLS over WinHTTP and SChannel (network). It runs for `main` and for pull
   requests from this repository only: a fork's pull request gets no secrets in its run,
   and is analyzed once merged. (It used to run on `workflow_run` to analyze forks too,
   checking out their code next to the token; Scorecard and CodeQL rightly flag that

@@ -956,5 +956,65 @@ mod tests {
         assert_eq!(x.project(), "my-app");
         x.cwd = String::new();
         assert_eq!(x.project(), "Claude");
+        assert_eq!(x.display_name(), "Claude");
+        x.workspace = Some("🛍️ Shop".into());
+        assert_eq!(x.display_name(), "🛍️ Shop");
+    }
+
+    #[test]
+    fn a_hook_tells_where_the_session_runs() {
+        let mut s = Sessions::default();
+        // No session id: nothing to say.
+        assert!(!s.apply(&HookMessage { session_id: String::new(), ..msg("UserPromptSubmit", 1) }));
+        let m = HookMessage {
+            title: Some("Fix it".into()),
+            claude_pid: Some(42),
+            claude_started: Some(7),
+            ide_pid: Some(43),
+            entrypoint: Some("cli".into()),
+            ..msg("UserPromptSubmit", 2)
+        };
+        assert!(s.apply(&m));
+        let x = s.get("s1").unwrap();
+        assert_eq!(
+            (x.title.as_deref(), x.claude_pid, x.claude_started, x.ide_pid),
+            (Some("Fix it"), Some(42), Some(7), Some(43))
+        );
+        assert!(!x.in_vscode() && s.iter().count() == 1);
+        // A stop for an agent it never heard start, and one without its id: nothing changes.
+        assert!(!s.apply(&HookMessage { agent_id: Some("a9".into()), ..msg("SubagentStop", 3) }));
+        assert!(!s.apply(&msg("SubagentStop", 4)));
+        assert_eq!(ListedState::parse("waiting"), ListedState::Waiting);
+        assert_eq!(ListedState::parse("asleep"), ListedState::Unknown);
+    }
+
+    #[test]
+    fn the_list_says_what_hooks_missed() {
+        let mut s = Sessions::default();
+        s.apply(&msg("Stop", 1));
+        assert_eq!(status(&s), Status::Done);
+        // Working again, then waiting for the user, by the list alone.
+        assert!(s.sync(&[listed(ListedState::Busy, 10)], 10));
+        assert_eq!(status(&s), Status::Working);
+        assert!(s.sync(&[listed(ListedState::Waiting, 20)], 20));
+        assert_eq!(status(&s), Status::NeedsInput);
+        // A state it doesn't know: the status stays.
+        s.sync(&[listed(ListedState::Unknown, 30)], 30);
+        assert_eq!(status(&s), Status::NeedsInput);
+        // Hooks switched off: a turn that ends in the list is done, not interrupted.
+        s.apply(&msg("UserPromptSubmit", 40));
+        s.unhook();
+        assert!(s.sync(&[listed(ListedState::Idle, 41)], 41));
+        assert_eq!(status(&s), Status::Done);
+    }
+
+    #[test]
+    fn names_its_window() {
+        let mut s = Sessions::default();
+        s.apply(&msg("SessionStart", 1));
+        assert!(s.set_workspace("s1", Some("Shop".into())));
+        assert!(!s.set_workspace("s1", Some("Shop".into())));
+        assert!(!s.set_workspace("other", Some("Shop".into())));
+        assert_eq!(s.get("s1").unwrap().display_name(), "Shop");
     }
 }

@@ -103,6 +103,12 @@ mod tests {
         assert_eq!(super::decode(b"glpat-fake").as_deref(), Some("glpat-fake"));
         let utf16: Vec<u8> = "glpat-fake".encode_utf16().flat_map(u16::to_le_bytes).collect();
         assert_eq!(super::decode(&utf16).as_deref(), Some("glpat-fake"));
+        // The end marks Credential Manager leaves behind go.
+        let marked: Vec<u8> = "abc\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(super::decode(&marked).as_deref(), Some("abc"));
+        // Neither UTF-16 (a lone surrogate) nor UTF-8: nothing.
+        assert_eq!(super::decode(&[0x00, 0xD8, 0x41, 0x00]), None);
+        assert_eq!(super::decode(&[0xFF, 0xFE, 0xFD]), None);
     }
 
     /// A made-up secret through this PC's Credential Manager: kept, read, listed, removed.

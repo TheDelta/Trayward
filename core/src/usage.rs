@@ -309,4 +309,61 @@ mod tests {
         let no_expiry = r#"{"claudeAiOauth":{"accessToken":"abc"}}"#;
         assert_eq!(access_token(no_expiry, 0), Ok("abc".into()));
     }
+
+    #[test]
+    fn asks_nobody_without_a_usable_login() {
+        let dir = std::env::temp_dir().join(format!("trayward-usage-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A config folder without a login, then with one that has expired: no request is made.
+        assert_eq!(fetch(&dir), Err(FetchError::NoLogin));
+        assert_eq!(fetch_plan(&dir), Err(FetchError::NoLogin));
+        let expired = r#"{"claudeAiOauth":{"accessToken":"made-up","expiresAt":1000}}"#;
+        std::fs::write(dir.join(".credentials.json"), expired).unwrap();
+        assert_eq!(fetch(&dir), Err(FetchError::LoginExpired));
+        assert_eq!(fetch_plan(&dir), Err(FetchError::LoginExpired));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn says_what_went_wrong() {
+        crate::i18n::set(crate::i18n::Choice::English);
+        let said = |e: FetchError| e.to_string();
+        assert!(said(FetchError::NoLogin).contains("sign in"));
+        assert!(said(FetchError::NotUsed).contains("isn't used"));
+        assert!(said(FetchError::LoginExpired).starts_with("Login expired"));
+        assert!(said(FetchError::RateLimited(Some(30))).starts_with("Rate limited"));
+        assert_eq!(said(FetchError::Network("offline".into())), "offline");
+        assert_eq!(said(FetchError::Server(503)), "Usage request failed (HTTP 503).");
+        assert!(said(FetchError::BadResponse).contains("usage API"));
+        crate::i18n::set(crate::i18n::Choice::German);
+        assert_eq!(said(FetchError::Server(503)), "Abfrage der Nutzung fehlgeschlagen (HTTP 503).");
+    }
+
+    #[test]
+    fn finds_claude_codes_folder() {
+        // Only where it would be: nothing in it is read.
+        let dir = config_dir();
+        let set = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty());
+        assert!(set.is_some_and(|d| dir == Path::new(&d)) || dir.ends_with(".claude"));
+    }
+
+    #[test]
+    fn names_more_plans() {
+        let plan = |org: &str| parse_plan(format!(r#"{{"organization":{{"organization_type":"{org}"}}}}"#).as_bytes());
+        assert_eq!(plan("claude_max").as_deref(), Some("Max"));
+        assert_eq!(plan("claude_team").as_deref(), Some("Team"));
+        assert_eq!(plan("claude_enterprise").as_deref(), Some("Enterprise"));
+        // Something new, and the account doesn't say it's free: no name rather than a wrong one.
+        assert_eq!(plan("claude_new"), None);
+        let max20 =
+            br#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#;
+        assert_eq!(parse_plan(max20).as_deref(), Some("Max 20x"));
+        assert_eq!(parse_plan(b"not json"), None);
+        // A scoped limit without its percentage isn't one.
+        let body = br#"{"limits": [{"kind": "weekly_scoped", "scope": {"model": {"id": "fable-1"}}}]}"#;
+        assert_eq!(parse_usage(body).unwrap().fable, None);
+        let by_id = br#"{"limits": [{"kind": "weekly_scoped", "percent": 9, "scope": {"model": {"id": "fable-1"}}}]}"#;
+        assert_eq!(parse_usage(by_id).unwrap().fable.map(|f| f.limit.used), Some(9.0));
+    }
 }

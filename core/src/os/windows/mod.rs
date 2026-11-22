@@ -310,6 +310,94 @@ pub fn system_language_is_german() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::i18n::{self, Choice};
+
+    #[test]
+    fn knows_its_own_process() {
+        let me = std::process::id();
+        let started = process_start_time(me).unwrap();
+        assert!(process_alive(me, None) && process_alive(me, Some(started)));
+        // Its pid with another start time: another process.
+        assert!(!process_alive(me, Some(started + 1)));
+        let now = crate::os::now_ms() / 1000;
+        assert!(started_by(me, now) && !started_by(me, now - 400 * 86_400));
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            process_image(me).and_then(|p| p.file_name().map(ToOwned::to_owned)),
+            exe.file_name().map(Into::into)
+        );
+        let table = process_table();
+        let own = table.get(&me).unwrap();
+        assert!(exe.file_name().is_some_and(|n| n.eq_ignore_ascii_case(&own.exe)), "{}", own.exe);
+        assert!(table.contains_key(&own.parent) || own.parent != 0);
+        trim_heap();
+        std::thread::spawn(background_thread).join().unwrap();
+    }
+
+    #[test]
+    fn a_process_that_ended_is_not_alive() {
+        let mut child = std::process::Command::new(env!("CARGO"))
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        // Still known to Windows (the handle is open), but ended.
+        assert!(!process_alive(pid, None));
+        drop(child);
+        // The idle process is no process to open; an unknown start counts as yes.
+        assert!(!process_alive(0, None));
+        assert!(started_by(0, 0));
+        assert!(process_image(0).is_none());
+    }
+
+    #[test]
+    fn tells_a_change_in_a_folder() {
+        let dir = std::env::temp_dir().join(format!("trayward-folder-watch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let watch = DirWatch::new(&dir).unwrap();
+        assert!(!watch.wait(std::time::Duration::from_millis(20)));
+        std::fs::write(dir.join("new.txt"), b"x").unwrap();
+        assert!(watch.wait(std::time::Duration::from_secs(10)));
+        drop(watch);
+        assert!(DirWatch::new(&dir.join("not-there")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_time_in_each_language() {
+        let noon = 1_794_398_400; // 2026-11-11T12:00:00Z
+        let offset = utc_offset(noon);
+        assert!(offset % 900 == 0 && offset.abs() <= 14 * 3600, "{offset}");
+        for choice in [Choice::English, Choice::German, Choice::System] {
+            i18n::set(choice);
+            let date = local_date(noon);
+            assert!(date.starts_with("11") || date.starts_with("12"), "{date}");
+            let time = local_time(noon, false);
+            assert!(time.chars().any(|c| c.is_ascii_digit()), "{time}");
+            let with_day = local_time(noon, true);
+            assert!(with_day.ends_with(&time) && with_day.len() > time.len(), "{with_day}");
+        }
+        i18n::set(Choice::English);
+        assert!(local_date(noon).contains("Nov"));
+        // A time Windows can't take: nothing, rather than a wrong date.
+        let far = 1_000_000_000_000;
+        assert_eq!((utc_offset(far), local_date(far), local_time(far, true)), (0, String::new(), String::new()));
+        let _ = system_language_is_german();
+    }
+
+    #[test]
+    fn reads_what_windows_wrote() {
+        let buf = [u16::from(b'1'), u16::from(b'4'), 0, 0];
+        assert_eq!(written(&buf, 3), "14");
+        assert_eq!(written(&buf, 0), "");
+        assert_eq!(written(&buf, 9), "");
+        assert_eq!(filetime_u64(FILETIME { dwLowDateTime: 2, dwHighDateTime: 1 }), (1 << 32) | 2);
+    }
+
     /// PATH from the registry: the system's folders are in it, their variables expanded.
     #[test]
     fn reads_path_as_it_is_now() {

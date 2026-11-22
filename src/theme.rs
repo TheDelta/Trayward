@@ -169,3 +169,37 @@ pub fn system_dark() -> bool {
     };
     r == ERROR_SUCCESS && v == 0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colours_come_from_hex() {
+        assert_eq!(rgb(0xFF8000), Color { r: 1.0, g: 128.0 / 255.0, b: 0.0, a: 1.0 });
+        assert_eq!(rgba(0x0000FF, 0.5), Color { r: 0.0, g: 0.0, b: 1.0, a: 0.5 });
+        assert_eq!(rgba(0x000000, 0.5).with_alpha(0.5).a, 0.25);
+    }
+
+    #[test]
+    fn levels_and_states_have_their_colours() {
+        for dark in [true, false] {
+            let pal = palette(dark);
+            assert_eq!(pal.level(10.0), pal.bar);
+            assert_eq!(pal.level(80.0), pal.warn);
+            assert_eq!(pal.level(95.0), pal.crit);
+            assert_eq!(pal.status(Status::Working), pal.working);
+            assert_eq!(pal.status(Status::NeedsInput), pal.needs_input);
+            assert_eq!(pal.status(Status::Done), pal.done);
+            assert_eq!(pal.status(Status::Idle), pal.idle);
+        }
+        assert_eq!(palette(true).window, DARK.window);
+        assert_eq!(palette(false).window, LIGHT.window);
+    }
+
+    /// The taskbar's theme is read, read only (either answer is fine).
+    #[test]
+    fn reads_the_taskbar_theme() {
+        assert_eq!(system_dark(), system_dark());
+    }
+}
