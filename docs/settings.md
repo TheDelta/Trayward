@@ -634,3 +634,9 @@ Once a day, Trayward asks GitHub (`api.github.com`, without a login) for its new
 version shows here and in the right-click menu, and a bubble tells you about it once. Nothing is
 downloaded or installed: **Download** opens the release page. On by default. **Check now** asks
 right away. Details: [Update check](how-it-works.md#update-check).
+
+### Location
+
+The folder `trayward.exe` is in. **Open** shows it there in Explorer, for replacing it with a newer
+version (exit Trayward first: right-click → Exit) or for moving it. Moved, it only needs to be
+started once from its new place: "Start with Windows" and the hooks then point there by themselves.

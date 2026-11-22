@@ -438,7 +438,7 @@ cargo build --release
 | MQTT              | On or off · the broker (edit, test, remove); Home Assistant finds the entities by itself                                                                                                                                                                                        |
 | Mailbox           | Off by default · its folder: found, or pasted                                                                                                                                                                                                                                   |
 | Custom extensions | Off by default · the folder your programs write to · each extension found, switched on one by one                                                                                                                                                                               |
-| About             | Version and the update check · who made it · source code, report a problem                                                                                                                                                                                                      |
+| About             | Version and the update check · where the exe is · who made it · source code, report a problem                                                                                                                                                                                   |
 
 Every setting has a **?** after its name: rest the mouse on it for a short explanation,
 click it for the full one in the [settings help](docs/settings.md).
