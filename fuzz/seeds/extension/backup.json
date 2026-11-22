@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "Backup",
+  "rows": [
+    { "type": "progress", "label": "Photos", "value": 0.4 },
+    { "type": "time", "label": "Next run", "at": "2026-11-23T02:00:00Z" },
+    { "type": "text", "label": "State", "text": "Copying" }
+  ]
+}

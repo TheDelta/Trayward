@@ -117,6 +117,18 @@ temporary folders. New logic comes with a test where it can be tested without th
 Windows UI (parsing, statistics, forecasts, settings). For visible changes, also try
 them in the demo, in light and dark mode, and say so in the pull request.
 
+**Fuzzing** (`fuzz/`, cargo-fuzz) feeds random bytes to the core's parsers. CI runs it
+(the workflow "Fuzzing"); to run a target yourself, on Linux or in WSL, with a nightly Rust:
+
+```sh
+cargo install cargo-fuzz --locked
+cargo +nightly fuzz list
+cargo +nightly fuzz run transcript fuzz/corpus/transcript fuzz/seeds/transcript -- -max_total_time=60
+```
+
+A crash leaves its input in `fuzz/artifacts/<target>/`: add it as a test with a sample line
+to the parser it broke, then fix it.
+
 **Smart App Control.** With Smart App Control on, Windows sometimes blocks a fresh
 unsigned build or test binary ("An Application Control policy has blocked this file",
 os error 4551). Building again with a different optimisation level gives a different

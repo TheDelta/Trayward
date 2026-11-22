@@ -99,7 +99,7 @@ pub fn load() -> Saved {
 /// Reads a state file: whole, or else field by field, so one unreadable part
 /// (a session's numbers) doesn't lose the rest (the history of the weekly
 /// limit). `None` if it isn't JSON at all; the flag says whether all was read.
-fn parse(bytes: &[u8]) -> Option<(Saved, bool)> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<(Saved, bool)> {
     if let Ok(saved) = serde_json::from_slice::<Saved>(bytes) {
         return Some((saved, true));
     }

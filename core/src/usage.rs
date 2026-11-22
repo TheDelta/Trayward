@@ -95,7 +95,7 @@ pub fn config_dir() -> PathBuf {
 }
 
 /// Extracts a usable access token from the contents of `.credentials.json`.
-fn access_token(credentials: &str, now_ms: i64) -> Result<String, FetchError> {
+pub(crate) fn access_token(credentials: &str, now_ms: i64) -> Result<String, FetchError> {
     let root: Value = serde_json::from_str(credentials).map_err(|_| FetchError::NoLogin)?;
     let oauth = &root["claudeAiOauth"];
     let token = oauth["accessToken"].as_str().filter(|t| !t.is_empty()).ok_or(FetchError::NoLogin)?;
@@ -139,7 +139,7 @@ pub fn fetch_plan(dir: &Path) -> Result<String, FetchError> {
     parse_plan(&api_get(dir, PROFILE_PATH)?).ok_or(FetchError::BadResponse)
 }
 
-fn parse_plan(body: &[u8]) -> Option<String> {
+pub(crate) fn parse_plan(body: &[u8]) -> Option<String> {
     let v: Value = serde_json::from_slice(body).ok()?;
     let org = &v["organization"];
     if let Some(name) = org["plan_display_name"].as_str().map(str::trim).filter(|n| !n.is_empty()) {
@@ -161,7 +161,7 @@ fn parse_plan(body: &[u8]) -> Option<String> {
     Some(name)
 }
 
-fn parse_usage(body: &[u8]) -> Result<Usage, FetchError> {
+pub(crate) fn parse_usage(body: &[u8]) -> Result<Usage, FetchError> {
     let v: Value = serde_json::from_slice(body).map_err(|_| FetchError::BadResponse)?;
     if !v.is_object() {
         return Err(FetchError::BadResponse);

@@ -1,0 +1,70 @@
+# The fuzzer (cargo-fuzz, libFuzzer) feeds random bytes to the core's parsers: the
+# agents' files, the usage endpoint's answer, the state file, addresses. Any panic
+# fails the run, and the input that caused it is kept as the run's artifact.
+# Locally (Linux or WSL): see CONTRIBUTING.md.
+name: Fuzzing
+
+on:
+  push:
+    branches: [main]
+    paths: [core/**, fuzz/**, Cargo.lock, .github/workflows/fuzz.yaml]
+  pull_request:
+    paths: [core/**, fuzz/**, Cargo.lock, .github/workflows/fuzz.yaml]
+  schedule:
+    - cron: "15 5 * * 0" # Sundays, longer
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # cargo-fuzz needs a nightly Rust (its sanitizer flags); a fixed one, so a run
+  # doesn't change with each night's build
+  NIGHTLY: nightly-2026-11-15
+  CARGO_FUZZ: 0.13.2
+
+jobs:
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust nightly and cargo-fuzz
+        run: |
+          rustup toolchain install "$NIGHTLY" --profile minimal
+          cargo install cargo-fuzz --version "$CARGO_FUZZ" --locked
+          # The fuzzer's crates exactly as in fuzz/Cargo.lock (cargo fuzz has no --locked)
+          cargo fetch --locked --manifest-path fuzz/Cargo.toml
+
+      # Half a minute per target on pull requests and pushes, ten on Sundays. The seeds
+      # (fuzz/seeds) are where each target starts; what it finds goes to fuzz/corpus.
+      - name: Fuzz every target
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          seconds=30
+          [ "$EVENT" = schedule ] && seconds=600
+          for target in $(cargo +"$NIGHTLY" fuzz list --fuzz-dir fuzz); do
+            echo "::group::$target"
+            mkdir -p "fuzz/corpus/$target"
+            cargo +"$NIGHTLY" fuzz run --fuzz-dir fuzz "$target" "fuzz/corpus/$target" "fuzz/seeds/$target" \
+              -- -max_total_time="$seconds" -rss_limit_mb=2048
+            echo "::endgroup::"
+          done
+
+      - name: The input that failed
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore

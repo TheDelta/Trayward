@@ -8,7 +8,7 @@ const files = (list) => list.map(q).join(" ");
 
 export default {
   // rustfmt formats whole crates; Clippy runs before the push (pre-push), it's slow
-  "*.rs": () => ["cargo fmt"],
+  "*.rs": () => ["cargo fmt", "cargo fmt --manifest-path fuzz/Cargo.toml"],
   "*.{mjs,json,yaml}": ["prettier --write --ignore-unknown"],
   "*.md": ["prettier --write --ignore-unknown", "markdownlint-cli2 --fix"],
   "*.py": [`${ruff} check --fix`, `${ruff} format`],

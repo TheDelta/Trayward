@@ -41,6 +41,7 @@ flowchart LR
 | Release                 | [release.yaml](release.yaml)                             | push to `main`, a `v*.*.*` tag         | `trayward.exe`, tag, GitHub release (only for a release commit)                                                                   |
 | Scorecard               | [scorecard.yaml](scorecard.yaml)                         | push to `main`, weekly, by hand        | OpenSSF security rating, README badge (public repository only)                                                                    |
 | Links                   | [links.yaml](links.yaml)                                 | weekly, by hand                        | Broken links in the Markdown files (public repository only)                                                                       |
+| Fuzzing                 | [fuzz.yaml](fuzz.yaml)                                   | changes to the core, Sundays, by hand  | Random input into the core's parsers (cargo-fuzz): no input may panic                                                             |
 
 ## CI
 
@@ -172,6 +173,16 @@ check.
   analysis runs without coverage.
 - **The quality gate fails on coverage:** add tests for the new lines where they can
   run without a window; SonarQube Cloud's pull request page lists them.
+
+## Fuzzing
+
+- Runs every target in `fuzz/` (cargo-fuzz, libFuzzer, with a fixed nightly Rust) on Linux:
+  half a minute each on pull requests and pushes that touch the core or the fuzzer, ten
+  minutes each on Sundays. Not a required check.
+- Each target starts from its seeds (`fuzz/seeds/<target>`), made-up examples of the format.
+- **When it fails:** a parser panicked on some input. The run's artifact `fuzz-artifacts`
+  has the input. Add it as a test of that parser (a sample line), fix the parser so it skips
+  what it doesn't understand, and run the target again locally (CONTRIBUTING.md).
 
 ## Weekly (public repository only)
 

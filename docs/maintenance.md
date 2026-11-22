@@ -153,6 +153,15 @@ settings. How to use them: [CONTRIBUTING.md](../CONTRIBUTING.md) and
   - Weekly, public repository only: `scorecard.yaml` (OpenSSF Scorecard, badge),
     `links.yaml` (lychee, `lychee.toml`). They test `github.repository_visibility`,
     which every event has (a `schedule` payload may lack `repository`).
+  - `fuzz.yaml`: cargo-fuzz (libFuzzer) on the core's parsers, through the core's
+    `fuzzing` feature (entry points that take raw bytes; never in the app's build).
+    The targets are a workspace of their own (`fuzz/`, its own `Cargo.lock`, kept by
+    Dependabot), so libFuzzer and its crates never reach the app's lockfile, cargo-deny or
+    the exe. On Linux, where the core builds; cargo-fuzz needs a nightly Rust, pinned by
+    date in the workflow. Half a minute per target on changes to the core, ten minutes
+    each on Sundays; not a required check (it doesn't run on every pull request). It also
+    counts for OpenSSF Scorecard's Fuzzing check, which looks for `libfuzzer_sys` in the
+    Rust files.
 - **Rulesets** (set up in GitHub, not in the repository) on `main`:
   - `main`: pull requests only, squash, signed and linear history, no force push or
     deletion, and the five job names of ci.yaml and pull-request.yaml ("Lint and

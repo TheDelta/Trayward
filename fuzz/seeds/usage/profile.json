@@ -1,0 +1,4 @@
+{
+  "account": { "has_claude_max": true },
+  "organization": { "organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x" }
+}

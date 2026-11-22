@@ -15,6 +15,9 @@ publish = false
 # thread, untranslated text recorded, a test folder for kept statistics). Never
 # in a build of the app.
 testing = []
+# For the fuzzer (fuzz/): entry points that feed raw bytes to the parsers. Never in a
+# build of the app.
+fuzzing = []
 
 [dependencies]
 serde = { workspace = true }

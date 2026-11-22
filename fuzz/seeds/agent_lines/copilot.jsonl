@@ -1,0 +1,3 @@
+{"type":"session.start","data":{"sessionId":"4c3b2a10","context":{"cwd":"/home/you/shop"}},"timestamp":"2026-11-22T10:00:00Z"}
+{"type":"user.message","data":{"content":"Fix the build"},"timestamp":"2026-11-22T10:00:01Z"}
+{"type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"powershell"},"timestamp":"2026-11-22T10:00:02Z"}

@@ -129,7 +129,7 @@ pub fn name_of(events: &Path) -> Option<String> {
 
 /// What a session's events say, as far as Trayward needs it.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Parsed {
+pub(crate) struct Parsed {
     id: Option<String>,
     cwd: Option<String>,
     /// The first prompt.
@@ -174,7 +174,7 @@ pub(crate) fn kind_of(line: &str) -> Option<&str> {
     line.strip_prefix("{\"type\":\"")?.split('"').next()
 }
 
-fn parse_line(p: &mut Parsed, line: &str) {
+pub(crate) fn parse_line(p: &mut Parsed, line: &str) {
     if kind_of(line).is_some_and(|k| !WANTED.contains(&k) && !WANTED_MORE.contains(&k)) {
         return;
     }

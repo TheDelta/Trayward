@@ -122,6 +122,7 @@ words:
   - keygrip
   - KEYINFO
   - keyinfo
+  - libfuzzer
   - linux
   - lpfn
   - lpstr

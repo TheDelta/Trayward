@@ -141,7 +141,9 @@ jobs:
 
       - name: rustfmt
         if: matrix.role == 'newest'
-        run: cargo fmt --check
+        run: |
+          cargo fmt --check
+          cargo fmt --manifest-path fuzz/Cargo.toml --check # its own workspace
 
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
