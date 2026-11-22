@@ -67,12 +67,6 @@ pub fn check(current: &str) -> Result<Option<Release>, String> {
     }
 }
 
-/// German translations of this file's text (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("GitHub answered {0}", "GitHub antwortete {0}"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

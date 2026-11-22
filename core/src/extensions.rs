@@ -403,12 +403,6 @@ impl Reader {
     }
 }
 
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("in {0}", "in {0}"),
-    ("{0} ago", "vor {0}"),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;

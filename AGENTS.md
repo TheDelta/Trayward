@@ -98,7 +98,7 @@ src/                 the Windows app
   settings_window.rs the settings window
   edit.rs            its text fields: Windows' own edit controls over the drawn boxes
   help.rs            the settings' "?": short help on hover, docs/settings.md on click
-  i18n.rs            the app's German tables, on top of the core's
+  i18n.rs, i18n/de.rs  the app's translations: all its German in de.rs, on top of the core's
   collector.rs       background reading: session lists, transcripts, window names
   vscode.rs, vscode_state.rs  VS Code windows, switching to a session, archived sessions
   terminal.rs        switching to a session in a terminal (console window, Windows Terminal tab), and the
@@ -113,7 +113,7 @@ core/src/            the core (trayward-core): no UI, nothing Windows-only outsi
                      windows/ (processes, local time, language, folder changes, HTTPS over WinHTTP,
                      TLS over SChannel, secrets in Credential Manager),
                      other.rs (fallbacks elsewhere, so the core builds and its tests run there)
-  i18n.rs            English and German: the language, the core's German tables
+  i18n.rs, i18n/de.rs  English and German: the language; all the core's German in de.rs
   stats.rs           statistics from transcripts (cached per file), prices, disk usage
   setup.rs           what a session loads (skills, MCP, instructions, memory) and its starting context
   keep.rs            kept statistics: sessions' numbers after their transcripts are deleted, and where
@@ -213,7 +213,7 @@ its changes in memory (`settings.rs`), so trying a setting in the demo changes n
   and recreated after Explorer restarts (`TaskbarCreated`).
 - **Settings** live in the registry (`settings.rs`), state in a JSON file
   (`store.rs`). Every settings card has help: a `### <card title>` section in
-  `docs/settings.md` and its short text (English and German) in `help.rs`; a test
+  `docs/settings.md` and its short text in `help.rs` (its German in `i18n/de.rs`); a test
   checks that both match. New settings get a default that keeps today's behaviour. The state
   file is written by its own thread (`store::Writer`), a moment after the last change:
   `App::save` only hands it over.
@@ -282,6 +282,10 @@ them: [docs/maintenance.md](docs/maintenance.md). The ones a change must not und
 - **Windows pitfall:** Python's `open(path, "w")` writes CRLF; scripts that edit repo
   files must pass `newline="\n"`. PowerShell's `Set-Content` adds a BOM in Windows
   PowerShell 5; use `[IO.File]::WriteAllText` or pwsh.
+- **Translations:** the code holds the English (`t("…")`, `f("…", …)`); the German of all of
+  it is in one file per crate, `src/i18n/de.rs` and `core/src/i18n/de.rs`, grouped by the file
+  the texts are from. A test fails on a text in the code without its German. Another language
+  would get its own file next to them.
 - **Wording in the UI:** plain, short, sentence case; say what happens ("Opens it in
   VS Code"), not how it's implemented.
 - **Controls in the settings:** joined segments pick one of a few options; actions (Edit,

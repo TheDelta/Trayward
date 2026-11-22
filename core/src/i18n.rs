@@ -1,6 +1,7 @@
-//! Translations. English is the source: the code holds the English text, and
-//! each file that shows text has a `DE` table of German translations next to
-//! it, registered in [`TABLES`]. Text without a translation stays English.
+//! Translations. English is the source: the code holds the English text, and the
+//! German for all of this crate's text is in one file, `i18n/de.rs` (another
+//! language would get a file of its own next to it). Text without a translation
+//! stays English.
 //!
 //! - [`t`] for fixed text: `t("Settings")`.
 //! - [`f`] for text with values: `f("{0} needs you", &[&name])`. The German
@@ -10,6 +11,8 @@
 //! The language is set here for everything. An app built on this crate has its
 //! own tables in a [`German`] and looks text up with [`t_in`] and [`tr_in`],
 //! which fall back to the tables here.
+
+mod de;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -91,26 +94,7 @@ fn system() -> Lang {
 pub type Table = &'static [(&'static str, &'static str)];
 
 /// The German tables of this crate's files, merged.
-pub const TABLES: &[Table] = &[
-    COMMON,
-    crate::alerts::DE,
-    crate::extensions::DE,
-    crate::mqtt::DE,
-    crate::push::DE,
-    crate::tracking::DE,
-    crate::update::DE,
-    crate::usage::DE,
-];
-
-/// Words used in several places.
-#[rustfmt::skip]
-const COMMON: &[(&str, &str)] = &[
-    ("now", "jetzt"),
-    ("Weekly", "Woche"),
-    ("5-hour", "5 Stunden"),
-    ("On", "An"),
-    ("Off", "Aus"),
-];
+pub const TABLES: &[Table] = &[de::DE];
 
 /// German translations from a few tables, merged the first time one is looked up.
 pub struct German {

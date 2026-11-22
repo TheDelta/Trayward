@@ -1,9 +1,11 @@
-//! Translations of the app's text: its files' German tables, on top of the
+//! Translations of the app's text: its German, all in `i18n/de.rs`, on top of the
 //! core's (`trayward_core::i18n`, which also holds the language setting).
 //!
 //! - [`t`] for fixed text: `t("Settings")`.
 //! - [`f`] for text with values: `f("{0} needs you", &[&name])`. The German
 //!   template may put the placeholders in another order.
+
+mod de;
 
 use trayward_core::i18n::{self as core, German, Table};
 pub use trayward_core::i18n::{Choice, set};
@@ -11,17 +13,8 @@ pub use trayward_core::i18n::{Choice, set};
 #[cfg(test)]
 pub use trayward_core::i18n::take_untranslated;
 
-/// The German tables of the app's files, merged.
-const TABLES: &[Table] = &[
-    crate::app::DE,
-    crate::flyout::DE,
-    crate::menu::DE,
-    crate::settings_window::DE,
-    crate::stats_window::DE,
-    crate::taskbars::DE,
-    crate::terminal::DE,
-    crate::vscode::DE,
-];
+/// The app's German.
+const TABLES: &[Table] = &[de::DE];
 
 static GERMAN: German = German::new(TABLES);
 

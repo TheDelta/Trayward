@@ -550,16 +550,6 @@ fn find_and_select(window: HWND, name: &str) -> windows::core::Result<bool> {
     }
 }
 
-/// German translations of its messages (see `i18n`).
-#[rustfmt::skip]
-pub const DE: &[(&str, &str)] = &[
-    ("Couldn't find this session's terminal in VS Code. Is its terminal panel open?", "Das Terminal dieser Sitzung wurde in VS Code nicht gefunden. Ist der Terminalbereich offen?"),
-    ("Couldn't look at the terminal: {0}", "Das Terminal konnte nicht angesehen werden: {0}"),
-    ("The terminal of this session is gone: the session has ended.", "Das Terminal dieser Sitzung ist weg: Die Sitzung wurde beendet."),
-    ("Couldn't find the terminal window of this session.", "Das Terminalfenster dieser Sitzung wurde nicht gefunden."),
-    ("Windows didn't let Trayward bring the terminal to the front.", "Windows hat Trayward nicht erlaubt, das Terminal nach vorne zu holen."),
-];
-
 #[cfg(test)]
 mod tests {
     use super::*;
