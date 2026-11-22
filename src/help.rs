@@ -210,6 +210,10 @@ pub const TOPICS: &[(&str, &str)] = &[
         "Where your programs put their files, one per extension. Each one found gets its switch below, off until you switch it on.",
     ),
     ("Check for updates", "It only tells you: nothing is downloaded or installed. Check now asks right away."),
+    (
+        "Location",
+        "The folder trayward.exe is in. To replace it with a newer one, exit Trayward first. Moved? Start it once from there: Start with Windows and the hooks follow.",
+    ),
     // END TOPICS
 ];
 
@@ -536,6 +540,10 @@ pub const DE: &[(&str, &str)] = &[
     (
         "Where your programs put their files, one per extension. Each one found gets its switch below, off until you switch it on.",
         "Wo deine Programme ihre Dateien ablegen, eine pro Erweiterung. Jede gefundene bekommt unten ihren Schalter, aus, bis du ihn einschaltest.",
+    ),
+    (
+        "The folder trayward.exe is in. To replace it with a newer one, exit Trayward first. Moved? Start it once from there: Start with Windows and the hooks follow.",
+        "Der Ordner, in dem trayward.exe liegt. Zum Ersetzen durch eine neuere zuerst Trayward beenden. Verschoben? Einmal dort starten: Mit Windows starten und die Hooks ziehen nach.",
     ),
     // END DE
 ];

@@ -143,6 +143,8 @@ pub struct Model {
     pub widgets_button: bool,
     /// What the widget left out to fit onto the Widgets button, if anything.
     pub fit: Option<crate::widget::Fit>,
+    /// The folder trayward.exe is in (the demo shows a made-up one: nothing of the user's).
+    pub exe_dir: String,
     /// The plan has a limit of its own for Fable (the usage endpoint reports one).
     pub fable_found: bool,
     /// Claude Code is used on this PC (its folder exists).
@@ -541,6 +543,8 @@ pub enum Action {
     Extension(String),
     /// Open their folder.
     ExtensionsFolder,
+    /// Show trayward.exe in its folder (About → Location).
+    ShowExe,
     PasteMailbox,
     FindMailbox,
     /// Display mode: slim or normal.
@@ -1583,6 +1587,9 @@ fn render<'a>(
                 p.update_check,
                 Action::UpdateCheck,
             )?;
+            // The exe's folder (a long one shows in full on hover); Open selects the exe in it.
+            let options = [("Open".to_string(), Action::ShowExe, false)];
+            y += l.buttons_card(y, "Location", &m.exe_dir, &options)?;
             let repo = crate::update::REPO_URL;
             let options = [("Open".to_string(), Action::Open(AUTHOR_URL.into()), false)];
             y += l.buttons_card(y, &crate::i18n::f("Made by {0}", &[&AUTHOR]), "github.com/TheDelta", &options)?;
@@ -2605,6 +2612,7 @@ pub const DE: &[(&str, &str)] = &[
     ("Download", "Herunterladen"),
     ("Check now", "Jetzt prüfen"),
     ("Check for updates", "Nach Updates suchen"),
+    ("Location", "Speicherort"),
     ("Once a day, asks GitHub for the newest release", "Fragt einmal am Tag GitHub nach der neuesten Version"),
     ("Made by {0}", "Von {0}"),
     ("Open", "Öffnen"),
@@ -2657,6 +2665,7 @@ mod tests {
             place: settings::Place::Tray,
             widgets_button: false,
             fit: None,
+            exe_dir: r"C:\Users\you\AppData\Local\Programs\Trayward".into(),
             taskbars: Taskbars::Chosen,
             chosen: vec!["a".into()],
             displays: vec![

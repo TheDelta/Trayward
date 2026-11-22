@@ -69,6 +69,10 @@ const APP_NAME: PCWSTR = w!("Trayward");
 /// This version (`Cargo.toml`). The core is told: its own `Cargo.toml` hasn't got it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The folder the demo says trayward.exe is in (Settings → About): where the README
+/// suggests putting it, for a user who isn't anyone.
+const DEMO_EXE_DIR: &str = r"C:\Users\you\AppData\Local\Programs\Trayward";
+
 // Messages of our own to the control window and the flyout. They carry nothing:
 // any program can post a message to a window.
 const WM_APP_ENABLE_TRACKING: u32 = WM_APP + 3;
@@ -3026,6 +3030,12 @@ impl App {
             place: self.widget_options.place,
             widgets_button: self.widgets.widgets_button(),
             fit: self.widgets.fit(),
+            exe_dir: if crate::demo::active() {
+                DEMO_EXE_DIR.to_string()
+            } else {
+                let exe = std::env::current_exe().ok();
+                exe.as_deref().and_then(std::path::Path::parent).map(|d| d.display().to_string()).unwrap_or_default()
+            },
             taskbars: self.widget_options.taskbars,
             chosen: self.widget_options.chosen.clone(),
             displays: self
@@ -4445,6 +4455,12 @@ fn settings_click(hwnd: HWND, action: settings_window::Action) {
             if let Some(dir) = extensions::dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 stats_window::explore(&dir, false);
+            }
+        }
+        // The demo's path is made up: it opens nothing of the user's.
+        Action::ShowExe => {
+            if let Some(exe) = std::env::current_exe().ok().filter(|_| !crate::demo::active()) {
+                stats_window::explore(&exe, true);
             }
         }
         Action::PasteMailbox => {
