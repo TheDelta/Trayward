@@ -25,7 +25,7 @@
   <br>
   <a href="https://sonarcloud.io/summary/new_code?id=TheDelta_trayward"><img alt="Quality gate" src="https://sonarcloud.io/api/project_badges/measure?project=TheDelta_trayward&metric=alert_status"></a>
   <a href="https://sonarcloud.io/summary/new_code?id=TheDelta_trayward"><img alt="Coverage" src="https://sonarcloud.io/api/project_badges/measure?project=TheDelta_trayward&metric=coverage"></a>
-  <a href="https://scorecard.dev/viewer/?uri=github.com/TheDelta/trayward"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/TheDelta/trayward/badge"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/TheDelta/Trayward"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/TheDelta/Trayward/badge"></a>
 </p>
 
 <p align="center">
