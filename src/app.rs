@@ -3025,6 +3025,7 @@ impl App {
             solid: self.widget_options.solid,
             place: self.widget_options.place,
             widgets_button: self.widgets.widgets_button(),
+            fit: self.widgets.fit(),
             taskbars: self.widget_options.taskbars,
             chosen: self.widget_options.chosen.clone(),
             displays: self

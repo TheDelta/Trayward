@@ -300,8 +300,9 @@ them: [docs/maintenance.md](docs/maintenance.md). The ones a change must not und
   version 1) readable by every later version: new fields and row types are optional, and a row
   type a version doesn't know is skipped.
 - **Status in the settings:** a card's description that says how something stands is a
-  `settings_window::Status` with its tone: green works, blue under way, yellow needs a
-  look, red failed. A description too long for its card shows in full on hover.
+  `settings_window::Status` with its tone: green works, blue under way (or worth knowing,
+  nothing wrong: what a choice leaves out), yellow needs a look, red failed. A description too
+  long for its card shows in full on hover.
 - Short comments that explain _why_; small helpers. When a change is a design
   decision, record it where its topic lives (here or in `docs/`).
 - **Plans and open items** go in `ROADMAP.md` (Next, Later, To investigate); take an item out
