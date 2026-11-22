@@ -309,7 +309,8 @@ them: [docs/maintenance.md](docs/maintenance.md). The ones a change must not und
 
 ## Testing
 
-All tests run without the network and without Claude Code.
+All tests run without the network (a server on 127.0.0.1 stands in where one is needed) and
+without Claude Code.
 
 - **Rust** (`cargo test`): parsing (session lists, transcripts, hooks, VS Code state),
   statistics, forecasts, time formatting, settings logic, the demo's transcripts. New

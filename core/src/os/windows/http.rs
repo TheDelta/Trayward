@@ -103,19 +103,21 @@ fn request(
             std::ptr::null_mut(),
         )
         .map_err(net_err)?;
-        // Missing, or a date instead of seconds: none.
-        let mut seconds = 0u32;
-        let mut size = std::mem::size_of::<u32>() as u32;
+        // As text: WinHTTP doesn't hand this header out as a number. Missing, or a
+        // date instead of seconds: none.
+        let mut text = [0u16; 64];
+        let mut size = std::mem::size_of_val(&text) as u32;
         let retry_after = WinHttpQueryHeaders(
             req.0,
-            WINHTTP_QUERY_RETRY_AFTER | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_QUERY_RETRY_AFTER,
             PCWSTR::null(),
-            Some(&mut seconds as *mut u32 as *mut c_void),
+            Some(text.as_mut_ptr() as *mut c_void),
             &mut size,
             std::ptr::null_mut(),
         )
-        .is_ok()
-        .then_some(seconds);
+        .ok()
+        .and_then(|()| text.get(..size as usize / 2))
+        .and_then(|units| String::from_utf16_lossy(units).trim().parse::<u32>().ok());
 
         let mut body = Vec::new();
         loop {
@@ -135,5 +137,100 @@ fn request(
             }
         }
         Ok(Response { status, body, retry_after })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    /// A server on 127.0.0.1 that answers one request with `answer` and gives back
+    /// what it received. `read` says whether it waits for the whole request first.
+    fn serve(answer: &'static str, read: bool) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            if read {
+                loop {
+                    let n = s.read(&mut buf).unwrap_or(0);
+                    got.extend_from_slice(buf.get(..n).unwrap_or_default());
+                    let text = String::from_utf8_lossy(&got).into_owned();
+                    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                        if n == 0 {
+                            break;
+                        }
+                        continue;
+                    };
+                    let length = head
+                        .lines()
+                        .find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-length")))
+                        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if n == 0 || body.len() >= length {
+                        break;
+                    }
+                }
+            }
+            s.write_all(answer.as_bytes()).unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+        (port, server)
+    }
+
+    fn post_to(port: u16, secure: bool) -> Result<Response, String> {
+        post(("127.0.0.1", port, secure), "/push?to=me", &[("X-Test", "yes"), ("Content-Type", "text/plain")], b"hello")
+    }
+
+    #[test]
+    fn sends_the_request_and_reads_the_answer() {
+        let (port, server) = serve("HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nthanks!", true);
+        let r = post_to(port, false).unwrap();
+        assert_eq!((r.status, r.body.as_slice(), r.retry_after), (200, &b"thanks!"[..], None));
+        let got = server.join().unwrap();
+        assert!(got.starts_with("POST /push?to=me HTTP/1.1\r\n"), "{got}");
+        assert!(got.contains("X-Test: yes\r\n") && got.contains("Content-Length: 5\r\n"), "{got}");
+        assert!(got.ends_with("\r\n\r\nhello"), "{got}");
+    }
+
+    #[test]
+    fn reads_how_long_to_wait() {
+        let (port, server) =
+            serve("HTTP/1.1 429 Too Many Requests\r\nRetry-After: 30\r\nContent-Length: 0\r\n\r\n", true);
+        let r = post_to(port, false).unwrap();
+        assert_eq!((r.status, r.retry_after), (429, Some(30)));
+        server.join().unwrap();
+        // A date instead of seconds: none.
+        let date = "HTTP/1.1 503 Busy\r\nRetry-After: Wed, 21 Oct 2026 07:28:00 GMT\r\nContent-Length: 0\r\n\r\n";
+        let (port, server) = serve(date, true);
+        let r = post_to(port, false).unwrap();
+        assert_eq!((r.status, r.retry_after), (503, None));
+        server.join().unwrap();
+    }
+
+    /// The request and its headers go to the host they were meant for and nowhere else.
+    #[test]
+    fn follows_no_redirect() {
+        let (port, server) =
+            serve("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/elsewhere\r\nContent-Length: 0\r\n\r\n", true);
+        assert_eq!(post_to(port, false).unwrap().status, 302);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn says_why_it_failed() {
+        // Nobody listens there.
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!(post_to(port, false).err().is_some_and(|e| e.starts_with("Network error")));
+        // HTTPS to a server that only speaks plain HTTP.
+        let (port, server) = serve("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", false);
+        assert!(post_to(port, true).err().is_some_and(|e| e.starts_with("Network error")));
+        server.join().unwrap();
     }
 }

@@ -134,11 +134,15 @@ pub fn parse(url: &str) -> Result<Broker, BadAddress> {
         None => (None, rest),
     };
     let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse().map_err(|_| BadAddress::NotMqtt)?),
+        Some((h, p)) => (h, p.parse().map_err(|_| BadAddress::Port)?),
         None => (hostport, default_port(tls)),
     };
-    if !host_ok(host) || port == 0 {
-        return Err(BadAddress::NotMqtt);
+    // An mqtt:// address with a wrong part says which part, not that it's no address.
+    if !host_ok(host) {
+        return Err(BadAddress::Host);
+    }
+    if port == 0 {
+        return Err(BadAddress::Port);
     }
     let (user, password) = match userinfo {
         Some(u) => match u.split_once(':') {
@@ -754,8 +758,15 @@ mod tests {
         assert_eq!((b.tls, b.port), (true, 8883));
         assert_eq!(b.shown(), "mqtts://ha@broker.example.org:8883");
         assert!(parse("ssl://broker:9883").unwrap().tls);
-        for bad in ["https://broker", "mqtt://", "mqtt://bro ker", "mqtt://broker:x", "broker:1883"] {
+        for bad in ["https://broker", "broker:1883"] {
             assert_eq!(parse(bad), Err(BadAddress::NotMqtt), "{bad}");
+        }
+        // An mqtt:// address names the part that's wrong.
+        for bad in ["mqtt://", "mqtt://bro ker", "mqtt://:1883"] {
+            assert_eq!(parse(bad), Err(BadAddress::Host), "{bad}");
+        }
+        for bad in ["mqtt://broker:x", "mqtt://broker:0", "mqtt://broker:70000"] {
+            assert_eq!(parse(bad), Err(BadAddress::Port), "{bad}");
         }
     }
 
@@ -874,7 +885,7 @@ mod tests {
         }
         // A whole address, with a port in the port field that isn't one.
         assert_eq!(Broker::new(false, "mqtt://ha", "x", "", None), Err(BadAddress::Port));
-        assert_eq!(Broker::new(false, "mqtt://bro ker", "", "", None), Err(BadAddress::NotMqtt));
+        assert_eq!(Broker::new(false, "mqtt://bro ker", "", "", None), Err(BadAddress::Host));
         let n = node();
         assert!(!n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_".contains(c)));
     }
