@@ -84,9 +84,11 @@ settings. How to use them: [CONTRIBUTING.md](../CONTRIBUTING.md) and
   token is limited to this repository, contents and pull requests; its branch and pull
   request start CI and the title check like anyone's, and it's the author of the
   release commit (never whoever started the run: see the co-author note in the
-  workflow). The workflow's own token only reads, the checkout keeps no credentials,
-  and the bot's token is made in the last step, for the push and the pull request
-  alone: the dev tools from npm that run before it (CSpell) are never near it. The release exe is built without a
+  workflow). The bot makes that commit through the Git database API (tree, commit, then
+  the branch), not with `git push`: GitHub signs a commit a GitHub App creates that way,
+  so it shows as Verified, which `main`'s ruleset needs (signed commits, no bypass). The
+  workflow's own token only reads, the checkout keeps no credentials, and the bot's
+  token is made in the last step, for the commit and the pull request alone: the dev tools from npm that run before it (CSpell) are never near it. The release exe is built without a
   cache (zizmor: cache poisoning), on Windows, and published from Linux, where the
   attestation and `gh` live. It has the C runtime linked in (`.cargo/config.toml`,
   `+crt-static`, for every build): `VCRUNTIME140.dll` isn't part of Windows, and "one

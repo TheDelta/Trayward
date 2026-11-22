@@ -91,8 +91,9 @@ the resulting version and links the pull request.
     fixes (`scripts/changelog.py`; the token reads them from GitHub).
   - Sets the version in `Cargo.toml` and `Cargo.lock` and, for a final version, turns
     `[Unreleased]` into the version's section (`scripts/release.py`).
-  - Commits it as the bot, so the squash merge on `main` is fully verified. The
-    pull request says who started it. (Authored by that person, the squash merge
+  - Commits it as the bot, through the API, so GitHub signs it (Verified: `main` takes
+    signed commits only) and the squash merge on `main` is fully verified. The pull
+    request says who started it. (Authored by that person, the squash merge
     would list them as a co-author, and GitHub can't verify a co-author's
     signature: "partially verified" for anyone who flags unsigned commits.)
   - Warns at the top of the pull request when the version bump looks too small for
