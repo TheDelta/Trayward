@@ -5,6 +5,7 @@
 use crate::theme::Color;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use windows::Win32::Foundation::{COLORREF, HWND, POINT, RECT, SIZE};
@@ -70,8 +71,14 @@ const MAX_LAYOUTS: usize = 4000;
 #[derive(Clone)]
 pub struct Icon(IWICBitmapSource);
 
+// The drawing objects of a thread (factories, layers, render targets) are never released
+// when it ends (`ManuallyDrop`): Rust 1.85, the oldest Trayward builds with, runs
+// thread-local destructors under Windows' loader lock (newer ones run them as FLS
+// callbacks), where releasing Direct2D's, DirectWrite's and WIC's objects can
+// wait on another thread and hang the process. The app draws on its UI thread, which
+// lives as long as the process; tests draw on threads of their own.
 thread_local! {
-    static GFX: RefCell<Option<Rc<Gfx>>> = const { RefCell::new(None) };
+    static GFX: ManuallyDrop<RefCell<Option<Rc<Gfx>>>> = const { ManuallyDrop::new(RefCell::new(None)) };
 }
 
 #[cfg(test)]
@@ -728,7 +735,7 @@ impl Layer {
 
 thread_local! {
     /// The layers of the layered windows (the widgets), by window.
-    static LAYERS: RefCell<HashMap<isize, Layer>> = RefCell::new(HashMap::new());
+    static LAYERS: ManuallyDrop<RefCell<HashMap<isize, Layer>>> = ManuallyDrop::new(RefCell::new(HashMap::new()));
 }
 
 /// Renders a `w`×`h` pixel frame with per-pixel alpha and shows it on the
@@ -771,7 +778,8 @@ pub fn present_layered(hwnd: HWND, w: i32, h: i32, dpi: f32, draw: impl FnOnce(&
 
 thread_local! {
     /// Render targets of ordinary windows, kept between paints while they're visible.
-    static TARGETS: RefCell<HashMap<isize, ID2D1HwndRenderTarget>> = RefCell::new(HashMap::new());
+    static TARGETS: ManuallyDrop<RefCell<HashMap<isize, ID2D1HwndRenderTarget>>> =
+        ManuallyDrop::new(RefCell::new(HashMap::new()));
 }
 
 /// Paints an ordinary (not layered) window during WM_PAINT, `w`×`h` pixels,
