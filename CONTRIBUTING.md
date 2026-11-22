@@ -6,10 +6,10 @@ are all welcome.
 ## Before you start
 
 - **Questions** ("how do I…?", "why does…?") belong in
-  [Discussions → Q&A](https://github.com/TheDelta/trayward/discussions/categories/q-a),
+  [Discussions → Q&A](https://github.com/TheDelta/Trayward/discussions/categories/q-a),
   not in issues.
 - **Bugs and feature requests:** please search the
-  [existing issues](https://github.com/TheDelta/trayward/issues) first, then use
+  [existing issues](https://github.com/TheDelta/Trayward/issues) first, then use
   one of the issue forms.
 - **Security problems:** please don't open a public issue. See
   [SECURITY.md](SECURITY.md).
@@ -31,7 +31,7 @@ manifest and version information with its `rc.exe`), Node.js 24 with npm 11 (`de
 `package.json`; `npm ci` stops on another Node) and Python 3.11 or newer.
 
 ```powershell
-git clone https://github.com/TheDelta/trayward.git
+git clone https://github.com/TheDelta/Trayward.git
 cd trayward
 npm ci                                   # the tools for docs and configs, and the Git hooks
 python -m venv .venv                     # the Python tools (Ruff, zizmor, actionlint, ShellCheck)

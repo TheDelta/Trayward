@@ -5,10 +5,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting! Please check the [existing issues](https://github.com/TheDelta/trayward/issues) first.
+        Thanks for reporting! Please check the [existing issues](https://github.com/TheDelta/Trayward/issues) first.
 
-        - Questions and setup help: [Discussions → Q&A](https://github.com/TheDelta/trayward/discussions/categories/q-a)
-        - Security problems: please report them privately, see [SECURITY.md](https://github.com/TheDelta/trayward/blob/main/SECURITY.md)
+        - Questions and setup help: [Discussions → Q&A](https://github.com/TheDelta/Trayward/discussions/categories/q-a)
+        - Security problems: please report them privately, see [SECURITY.md](https://github.com/TheDelta/Trayward/blob/main/SECURITY.md)
 
   - type: textarea
     id: what

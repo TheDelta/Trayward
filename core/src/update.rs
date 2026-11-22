@@ -6,7 +6,7 @@ use serde_json::Value;
 /// The project on GitHub. The same as `repository` in the app's `Cargo.toml` (a
 /// test of the app checks it): this crate's own `Cargo.toml` has neither that nor
 /// the app's version, so neither is read from it.
-pub const REPO_URL: &str = "https://github.com/TheDelta/trayward";
+pub const REPO_URL: &str = "https://github.com/TheDelta/Trayward";
 
 /// The licenses of the crates a version is built from: a file of its release
 /// (`scripts/licenses.py` makes it, the Release workflow attaches it).
@@ -41,7 +41,11 @@ pub fn newer(body: &str, current: &str) -> Option<Release> {
     }
     let tag = v["tag_name"].as_str()?;
     let url = v["html_url"].as_str()?;
-    if !url.starts_with(&format!("{REPO_URL}/")) {
+    // GitHub's names don't care about case, and GitHub writes the repository's the way
+    // it's named at the time (a rename can change only the case): the release counts
+    // by its address whatever the case.
+    let ours = format!("{REPO_URL}/").to_ascii_lowercase();
+    if !url.get(..ours.len()).is_some_and(|start| start.eq_ignore_ascii_case(&ours)) {
         return None;
     }
     (version(tag)? > version(current)?)
@@ -85,7 +89,7 @@ mod tests {
     fn links_a_versions_licenses() {
         assert_eq!(
             licenses_url("1.2.3"),
-            "https://github.com/TheDelta/trayward/releases/download/v1.2.3/THIRD-PARTY-LICENSES.txt"
+            "https://github.com/TheDelta/Trayward/releases/download/v1.2.3/THIRD-PARTY-LICENSES.txt"
         );
     }
 
@@ -103,5 +107,22 @@ mod tests {
         // A link to somewhere else isn't opened.
         let elsewhere = r#"{"tag_name":"v9.0.0","html_url":"https://example.com/x"}"#;
         assert!(newer(elsewhere, "0.1.0").is_none());
+        // Nor one to another repository whose name only starts the same.
+        let other =
+            r#"{"tag_name":"v9.0.0","html_url":"https://github.com/TheDelta/Trayward-fork/releases/tag/v9.0.0"}"#;
+        assert!(newer(other, "0.1.0").is_none());
+    }
+
+    /// GitHub writes the address in the case the repository is named in at the time, and
+    /// the comparison once cared about case: 0.1.0 and 0.2.0 (`TheDelta/trayward`) took
+    /// 0.2.0's `TheDelta/Trayward` for a link elsewhere and said "up to date".
+    #[test]
+    fn finds_a_release_whatever_the_case_of_the_address() {
+        for repo in ["TheDelta/Trayward", "TheDelta/trayward", "TheDelta/TRAYWARD"] {
+            let url = format!("https://github.com/{repo}/releases/tag/v0.3.0");
+            let body = format!(r#"{{"tag_name":"v0.3.0","html_url":"{url}","draft":false,"prerelease":false}}"#);
+            let r = newer(&body, "0.2.0").unwrap_or_else(|| panic!("{repo}: not found"));
+            assert_eq!((r.version.as_str(), r.url.as_str()), ("0.3.0", url.as_str()));
+        }
     }
 }

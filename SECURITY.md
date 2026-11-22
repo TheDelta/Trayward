@@ -14,7 +14,7 @@ Security fixes go into the latest release. Please update to it before reporting.
 **Please don't report security problems in public issues or discussions.**
 
 Report them privately through GitHub:
-[**Report a vulnerability**](https://github.com/TheDelta/trayward/security/advisories/new)
+[**Report a vulnerability**](https://github.com/TheDelta/Trayward/security/advisories/new)
 (repository → **Security** → **Report a vulnerability**).
 
 Please include:

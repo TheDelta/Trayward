@@ -2,7 +2,7 @@
 
 What's planned for Trayward, what waits for later and what still needs a look. Nothing here is a
 promise or has a date. Ideas are welcome: open a
-[feature request](https://github.com/TheDelta/trayward/issues/new?template=feature_request.yaml)
+[feature request](https://github.com/TheDelta/Trayward/issues/new?template=feature_request.yaml)
 or start a discussion.
 
 What's done is in [CHANGELOG.md](CHANGELOG.md); what Trayward can't do on purpose or for now is

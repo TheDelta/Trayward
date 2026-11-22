@@ -3,7 +3,7 @@ exclude_path = ["node_modules", ".venv", "target", "CHANGELOG.md"] # compare lin
 exclude = [
   "^https?://(www\\.)?example\\.(com|org)", # placeholders in the docs
   "^https?://(localhost|127\\.0\\.0\\.1)", # local addresses in examples
-  "^https://github\\.com/TheDelta/trayward/(discussions|security|issues/new)", # need a login
+  "(?i)^https://github\\.com/TheDelta/Trayward/(discussions|security|issues/new)", # need a login (any case: GitHub's names have none)
   "^https://github\\.com/settings/", # the user's own settings: need a login
   "^https://gitlab\\.com/-/user_settings/", # likewise
 ]
