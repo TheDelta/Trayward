@@ -98,7 +98,7 @@ pub fn home() -> Option<PathBuf> {
 
 /// What a session file says, as far as Trayward needs it.
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Parsed {
+pub(crate) struct Parsed {
     id: Option<String>,
     cwd: Option<String>,
     title: Option<String>,
@@ -243,7 +243,7 @@ fn complete_lines(buf: &[u8], skip_first: bool) -> impl Iterator<Item = &str> {
     lines.split(|&b| b == b'\n').filter_map(|l| std::str::from_utf8(l).ok()).filter(|l| !l.trim().is_empty())
 }
 
-fn parse_line(p: &mut Parsed, line: &str, head: bool) {
+pub(crate) fn parse_line(p: &mut Parsed, line: &str, head: bool) {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return };
     let at = v["timestamp"].as_str().and_then(parse_rfc3339).unwrap_or(0);
     let payload = &v["payload"];

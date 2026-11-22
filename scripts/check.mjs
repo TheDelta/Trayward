@@ -22,6 +22,12 @@ const steps = [
   ...(rust
     ? [
         ["rustfmt (format)", ["cargo", "fmt", "--check"], ["cargo", "fmt"]],
+        // The fuzzer's crate is a workspace of its own (fuzz/): the one above doesn't reach it
+        [
+          "rustfmt (fuzz targets)",
+          ["cargo", "fmt", "--manifest-path", "fuzz/Cargo.toml", "--check"],
+          ["cargo", "fmt", "--manifest-path", "fuzz/Cargo.toml"],
+        ],
         ["Clippy (lint)", ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]],
         // Broken links and HTML in doc comments (the rustdoc lints in Cargo.toml deny them)
         [

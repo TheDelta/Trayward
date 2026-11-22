@@ -1,0 +1,71 @@
+# The fuzzer's targets (cargo-fuzz, libFuzzer): each feeds random bytes to the core's
+# parsers through `trayward_core::fuzzing`. A workspace of its own: not part of the
+# app's build, its lints or its crates (`cargo deny` checks the app's). Runs on Linux,
+# with a nightly Rust: see .github/workflows/fuzz.yaml and CONTRIBUTING.md.
+[package]
+name = "trayward-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+trayward-core = { path = "../core", features = ["fuzzing"] }
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "transcript"
+path = "fuzz_targets/transcript.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session"
+path = "fuzz_targets/session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "usage"
+path = "fuzz_targets/usage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension"
+path = "fuzz_targets/extension.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "agent_lines"
+path = "fuzz_targets/agent_lines.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "state"
+path = "fuzz_targets/state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "addresses"
+path = "fuzz_targets/addresses.rs"
+test = false
+doc = false
+bench = false

@@ -143,6 +143,7 @@ build.rs, app.rc, app.manifest, assets/   icon, manifest, version info from Carg
 scripts/             release.py, changelog.py, pr_title.py, licenses.py (Python, stdlib), check.mjs, tools.mjs, run.mjs
                      (npm start, stop, demo), extension-example.mjs (a sample extension file)
 scripts/tests/       tests of the release scripts
+fuzz/                the fuzzer's targets (cargo-fuzz, its own workspace) and their seeds
 docs/                settings.md (the users' help), how-it-works.md, maintenance.md, mailbox.md, extensions.md,
                      images/ (from the demo)
 .github/             workflows (see its README), issue forms, Dependabot
@@ -324,6 +325,11 @@ without Claude Code.
   `render(None, …)` lays out, and `gfx::testing::offscreen` draws into memory. Coverage
   is measured in CI (cargo-llvm-cov, coverage.py) and aims at 80 % (SonarQube Cloud;
   what it leaves out, and why, is in `sonar-project.properties`).
+- **Fuzzing** (`fuzz/`, cargo-fuzz): random bytes into the core's parsers (the agents'
+  files, the usage endpoint's answer, the state file, addresses) through
+  `trayward_core::fuzzing`; no input may panic. The workflow "Fuzzing" runs every target
+  on pull requests that touch the core and longer every Sunday. A new parser of outside
+  input gets an entry point there (and its target and seeds in `fuzz/`).
 - **Release scripts** (`scripts/tests/`, stdlib `unittest`): version bumps, the
   changelog generator, the release notes, the pull request title help.
 - **Visible changes:** run `--demo` and look, in light and dark mode, at 100 % and

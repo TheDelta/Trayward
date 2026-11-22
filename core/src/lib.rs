@@ -12,6 +12,8 @@ pub mod demo;
 pub mod extensions;
 pub mod forecast;
 pub mod forge;
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod fuzzing;
 pub mod gpg;
 pub mod hook;
 pub mod i18n;

@@ -159,7 +159,7 @@ pub(crate) fn once_key(kind: u8, id: &str) -> u64 {
 
 /// Incremental parser state for one transcript.
 #[derive(Default)]
-struct Parser {
+pub(crate) struct Parser {
     custom_title: Option<String>,
     ai_title: Option<String>,
     model: Option<String>,
@@ -200,7 +200,7 @@ fn ttl_secs(s: &str) -> Option<i64> {
 }
 
 impl Parser {
-    fn line(&mut self, line: &str) {
+    pub(crate) fn line(&mut self, line: &str) {
         // Cheap substring checks first: most lines are irrelevant and some are huge.
         if line.contains("\"type\":\"custom-title\"") || line.contains("\"type\":\"ai-title\"") {
             self.title_line(line);

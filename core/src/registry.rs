@@ -36,7 +36,7 @@ impl Source {
 }
 
 /// Parses one session file. `distro` is where it came from.
-fn parse(v: &Value, distro: Option<&str>) -> Option<Listed> {
+pub(crate) fn parse(v: &Value, distro: Option<&str>) -> Option<Listed> {
     let text = |k: &str| v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
     if v["spare"] == Value::Bool(true) || v["kind"].as_str().is_some_and(|k| k != "interactive") {
         return None;
