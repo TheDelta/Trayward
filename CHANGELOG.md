@@ -37,7 +37,8 @@ release's notes on GitHub are its section here.
 The first public release: your coding agents' usage limits and sessions in the taskbar.
 Tested on Windows 11 with Claude Code. OpenAI's Codex CLI and GitHub Copilot's agent are
 supported too, but untested so far: feedback is welcome. Linux, macOS and a signed exe are on
-the roadmap.
+the roadmap. Built in the open: about 450 tests (about 91 % coverage), CodeQL, SonarQube Cloud
+and OpenSSF Scorecard, and the exe built by GitHub Actions with a provenance attestation.
 
 ### 🚀 Features
 
@@ -47,7 +48,9 @@ the roadmap.
   displays you choose; at any edge of the screen (at the left or right, above the tray: two
   lines on a taskbar with labels, a column on one without).
 - **Room of its own:** optionally on Windows' Widgets button, which app buttons keep
-  away from, wherever Windows puts it.
+  away from, wherever Windows puts it. What doesn't fit there gives way step by step (the
+  usage bars, then the system monitor a column at a time, then slim), and the settings say
+  what's left out.
 - **Slim mode:** a narrower widget, its limits taking turns; today's limit takes turns
   with the 5-hour one in the normal widget.
 - **Flyout:** reset times, the weekly limit split into days from midnight, each with its
@@ -127,49 +130,6 @@ the roadmap.
   the flyout (merge and pull requests, the GPG key timer).
 - **Demo mode** (`--demo`): made-up sessions, usage and statistics, for screenshots
   and trying it out, as a Max or an Ultra plan.
-
-### 🐛 Fixes
-
-- **widget:** On the Widgets button, the bars and the monitor give way before slim by [@TheDelta](https://github.com/TheDelta) in [#10](https://github.com/TheDelta/Trayward/pull/10)
-- **stats:** The heatmap's tooltip reads its cell without indexing by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- Drawing objects outlive their thread, so tests don't hang on Rust 1.85 by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **usage:** A 429's Retry-After is read, HTTP and TLS tested against a local server by [@TheDelta](https://github.com/TheDelta) in [#15](https://github.com/TheDelta/Trayward/pull/15)
-- An mqtt:// address with a wrong host or port says which by [@TheDelta](https://github.com/TheDelta) in [#15](https://github.com/TheDelta/Trayward/pull/15)
-- **widget:** The Widgets button leaves out the monitor a column at a time by [@TheDelta](https://github.com/TheDelta) in [#17](https://github.com/TheDelta/Trayward/pull/17)
-
-### 🔒 Security
-
-- No fork code next to the analysis token, network table read cleanly by [@TheDelta](https://github.com/TheDelta) in [#12](https://github.com/TheDelta/Trayward/pull/12)
-- The core's coverage reaches the analysis, no pictures read as text by [@TheDelta](https://github.com/TheDelta) in [#13](https://github.com/TheDelta/Trayward/pull/13)
-
-### 📚 Documentation
-
-- Who may create a release tag isn't restricted by [@TheDelta](https://github.com/TheDelta) in [#8](https://github.com/TheDelta/Trayward/pull/8)
-- How windows are tested, coverage's aim and what it leaves out by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- The demo's merge requests have their doc comment back by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-
-### 📦 Dependencies
-
-- Bump ossf/scorecard-action from 2.5.0 to 2.6.0 in the actions group across 1 directory by [@dependabot](https://github.com/apps/dependabot) in [#16](https://github.com/TheDelta/Trayward/pull/16)
-
-### 🧰 Maintenance
-
-- Make the coverage folder, keep the release tests off the real repository by [@TheDelta](https://github.com/TheDelta) in [#9](https://github.com/TheDelta/Trayward/pull/9)
-- The first findings of SonarQube Cloud on GitHub by [@TheDelta](https://github.com/TheDelta) in [#11](https://github.com/TheDelta/Trayward/pull/11)
-- Drop the analysis scope settings that have no effect anymore by [@TheDelta](https://github.com/TheDelta) in [#12](https://github.com/TheDelta/Trayward/pull/12)
-- Coverage to 90 %, windows drawn without a window by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **stats:** Every page of the statistics window laid out and drawn by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **settings:** Every page and card state drawn, the window without its window by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **widget:** The system monitor's samples, the colours and each plan drawn by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **notifications:** Rendered sounds kept, the quiet check asked by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **sessions:** Lock files, window names, config folders and the system sqlite by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **settings:** No test reads the stored settings of the PC it runs on by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **flyout:** Every state of the flyout laid out and drawn by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **notifications:** Bubbles of every kind laid out and drawn by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **widget:** Every look of the widget drawn, at the bottom, slim and on a side by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- **widget:** No assumption about the graphics cards' memory by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- The Rust jobs end after 30 minutes by [@TheDelta](https://github.com/TheDelta) in [#14](https://github.com/TheDelta/Trayward/pull/14)
-- The refusals of TLS against a local server, HTTP and TLS count for coverage by [@TheDelta](https://github.com/TheDelta) in [#15](https://github.com/TheDelta/Trayward/pull/15)
 
 [Unreleased]: https://github.com/TheDelta/trayward/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/TheDelta/trayward/releases/tag/v0.1.0
