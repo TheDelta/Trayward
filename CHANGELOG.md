@@ -32,10 +32,13 @@ release's notes on GitHub are its section here.
     🔒 Security, 📚 Documentation, 📦 Dependencies, 🧰 Maintenance.
 -->
 
+## [0.1.0] - 2026-11-22
+
 The first public release: your coding agents' usage limits and sessions in the taskbar.
 Tested on Windows 11 with Claude Code. OpenAI's Codex CLI and GitHub Copilot's agent are
 supported too, but untested so far: feedback is welcome. Linux, macOS and a signed exe are on
-the roadmap.
+the roadmap. Built in the open: about 450 tests (about 91 % coverage), CodeQL, SonarQube Cloud
+and OpenSSF Scorecard, and the exe built by GitHub Actions with a provenance attestation.
 
 ### 🚀 Features
 
@@ -45,7 +48,9 @@ the roadmap.
   displays you choose; at any edge of the screen (at the left or right, above the tray: two
   lines on a taskbar with labels, a column on one without).
 - **Room of its own:** optionally on Windows' Widgets button, which app buttons keep
-  away from, wherever Windows puts it.
+  away from, wherever Windows puts it. What doesn't fit there gives way step by step (the
+  usage bars, then the system monitor a column at a time, then slim), and the settings say
+  what's left out.
 - **Slim mode:** a narrower widget, its limits taking turns; today's limit takes turns
   with the 5-hour one in the normal widget.
 - **Flyout:** reset times, the weekly limit split into days from midnight, each with its
@@ -125,3 +130,6 @@ the roadmap.
   the flyout (merge and pull requests, the GPG key timer).
 - **Demo mode** (`--demo`): made-up sessions, usage and statistics, for screenshots
   and trying it out, as a Max or an Ultra plan.
+
+[Unreleased]: https://github.com/TheDelta/trayward/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/TheDelta/trayward/releases/tag/v0.1.0
