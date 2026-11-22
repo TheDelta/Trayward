@@ -32,6 +32,16 @@ release's notes on GitHub are its section here.
     🔒 Security, 📚 Documentation, 📦 Dependencies, 🧰 Maintenance.
 -->
 
+## [0.2.1] - 2026-11-22
+
+### 🐛 Fixes
+
+- The update check finds a release whatever the case of the repository's name by [@TheDelta](https://github.com/TheDelta) in [#26](https://github.com/TheDelta/Trayward/pull/26)
+
+### 🧰 Maintenance
+
+- The core's parsers fuzzed, with cargo-fuzz in CI by [@TheDelta](https://github.com/TheDelta) in [#25](https://github.com/TheDelta/Trayward/pull/25)
+
 ## [0.2.0] - 2026-11-22
 
 ### 🚀 Features
@@ -150,6 +160,7 @@ and OpenSSF Scorecard, and the exe built by GitHub Actions with a provenance att
 - **Demo mode** (`--demo`): made-up sessions, usage and statistics, for screenshots
   and trying it out, as a Max or an Ultra plan.
 
-[Unreleased]: https://github.com/TheDelta/Trayward/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/TheDelta/Trayward/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/TheDelta/Trayward/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TheDelta/Trayward/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TheDelta/Trayward/releases/tag/v0.1.0
