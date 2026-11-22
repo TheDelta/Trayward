@@ -795,7 +795,7 @@ mod tests {
         assert_eq!(v["value_template"], "{{ value_json.claude_weekly }}");
         assert_eq!(v["availability_topic"], "trayward/dev-pc/availability");
         assert_eq!(v["device"]["identifiers"][0], "trayward_dev-pc");
-        assert_eq!(v["device"]["configuration_url"], "https://github.com/TheDelta/trayward");
+        assert_eq!(v["device"]["configuration_url"], "https://github.com/TheDelta/Trayward");
         assert_eq!(v["device"]["sw_version"], "1.2.3");
         assert_eq!(v["origin"]["name"], "Trayward");
         // Codex is shown, Copilot isn't: its entities are removed, like those of earlier versions.

@@ -804,7 +804,7 @@ go out: workspace names, no prompts, replies, titles or paths.
 ## Update check
 
 Once a day (and when "Check now" in Settings → About is clicked), `GET
-api.github.com/repos/TheDelta/trayward/releases/latest`, without a login. A newer version
+api.github.com/repos/TheDelta/Trayward/releases/latest`, without a login. A newer version
 (`v1.2.3`; drafts and pre-releases don't count) shows in Settings → About and the right-click menu,
 and a bubble tells about it once per version; a click opens its release page (only pages of the
 project on GitHub). Nothing is downloaded or installed. No release yet (404) counts as up to date.

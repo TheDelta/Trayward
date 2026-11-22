@@ -150,6 +150,6 @@ and OpenSSF Scorecard, and the exe built by GitHub Actions with a provenance att
 - **Demo mode** (`--demo`): made-up sessions, usage and statistics, for screenshots
   and trying it out, as a Max or an Ultra plan.
 
-[Unreleased]: https://github.com/TheDelta/trayward/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/TheDelta/trayward/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/TheDelta/trayward/releases/tag/v0.1.0
+[Unreleased]: https://github.com/TheDelta/Trayward/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TheDelta/Trayward/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/TheDelta/Trayward/releases/tag/v0.1.0

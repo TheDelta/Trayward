@@ -17,11 +17,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TheDelta/trayward/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/TheDelta/trayward/actions/workflows/ci.yaml/badge.svg"></a>
-  <a href="https://github.com/TheDelta/trayward/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/TheDelta/trayward?include_prereleases&sort=semver"></a>
+  <a href="https://github.com/TheDelta/Trayward/actions/workflows/ci.yaml"><img alt="CI" src="https://github.com/TheDelta/Trayward/actions/workflows/ci.yaml/badge.svg"></a>
+  <a href="https://github.com/TheDelta/Trayward/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/TheDelta/Trayward?include_prereleases&sort=semver"></a>
   <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078d4">
   <img alt="Rust 1.85+" src="https://img.shields.io/badge/rust-1.85%2B-b7410e">
-  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/TheDelta/trayward"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/TheDelta/Trayward"></a>
   <br>
   <a href="https://sonarcloud.io/summary/new_code?id=TheDelta_trayward"><img alt="Quality gate" src="https://sonarcloud.io/api/project_badges/measure?project=TheDelta_trayward&metric=alert_status"></a>
   <a href="https://sonarcloud.io/summary/new_code?id=TheDelta_trayward"><img alt="Coverage" src="https://sonarcloud.io/api/project_badges/measure?project=TheDelta_trayward&metric=coverage"></a>
@@ -54,14 +54,14 @@ long its prompt cache lasts. One click takes you to the session in VS Code.
 >   [GitHub Copilot](https://github.com/features/copilot)'s agent. Their support is written
 >   from their file formats and checked by tests in code, but nobody has used it for real
 >   yet. If you use one of them, please say how it goes: an
->   [issue](https://github.com/TheDelta/trayward/issues/new?template=bug_report.yaml) when
+>   [issue](https://github.com/TheDelta/Trayward/issues/new?template=bug_report.yaml) when
 >   something is wrong, a note in
->   [Discussions](https://github.com/TheDelta/trayward/discussions) when it works. Other
+>   [Discussions](https://github.com/TheDelta/Trayward/discussions) when it works. Other
 >   Claude plans (Max, Team, Enterprise) haven't been tried either.
 > - **On the roadmap:** Linux and macOS, and a signed exe (today Windows warns about the
 >   unsigned one). They are coming, sooner or later: there are no dates. More AI coding
 >   agents can follow too. See [ROADMAP.md](ROADMAP.md), and say what you'd like in
->   [Ideas](https://github.com/TheDelta/trayward/discussions/categories/ideas).
+>   [Ideas](https://github.com/TheDelta/Trayward/discussions/categories/ideas).
 
 - **One small exe.** Native Windows, no runtime to install (the C runtime is linked in), no
   installer, no account. About
@@ -374,7 +374,7 @@ edges, and please report them.
 ## 🚀 Install
 
 1. Download `trayward.exe` from the
-   [latest release](https://github.com/TheDelta/trayward/releases/latest) and put it
+   [latest release](https://github.com/TheDelta/Trayward/releases/latest) and put it
    somewhere permanent, e.g. `%LOCALAPPDATA%\Programs\Trayward\`.
 2. Start it. The widget appears to the left of the tray icons.
 3. Right-click it → **Settings…** → **Start with Windows**.
@@ -403,7 +403,7 @@ Needs [Rust](https://rustup.rs/) 1.85 or newer (MSVC toolchain) and the Windows 
 (part of the Visual Studio Build Tools):
 
 ```powershell
-git clone https://github.com/TheDelta/trayward.git
+git clone https://github.com/TheDelta/Trayward.git
 cd trayward
 cargo build --release
 .\target\release\trayward.exe
@@ -532,11 +532,11 @@ command-line flags, the hooks it installs, or where it keeps its data. See
 ## 💬 Questions, ideas and bugs
 
 - **Questions and help:** please use
-  [Discussions → Q&A](https://github.com/TheDelta/trayward/discussions/categories/q-a)
+  [Discussions → Q&A](https://github.com/TheDelta/Trayward/discussions/categories/q-a)
   rather than an issue.
-- **Ideas:** open a [feature request](https://github.com/TheDelta/trayward/issues/new?template=feature_request.yaml)
+- **Ideas:** open a [feature request](https://github.com/TheDelta/Trayward/issues/new?template=feature_request.yaml)
   or start a discussion. What's planned already: [ROADMAP.md](ROADMAP.md).
-- **Bugs:** open a [bug report](https://github.com/TheDelta/trayward/issues/new?template=bug_report.yaml).
+- **Bugs:** open a [bug report](https://github.com/TheDelta/Trayward/issues/new?template=bug_report.yaml).
 - **Security issues:** please report them privately, see [SECURITY.md](SECURITY.md).
 
 ## 🛠️ Contributing
@@ -552,7 +552,7 @@ Made by [Alex 'Delta' Diller](https://github.com/TheDelta).
 
 [MIT](LICENSE). The Rust crates Trayward is built with are listed in `Cargo.lock`; every
 release has their license texts next to the exe
-([THIRD-PARTY-LICENSES.txt](https://github.com/TheDelta/trayward/releases/latest/download/THIRD-PARTY-LICENSES.txt);
+([THIRD-PARTY-LICENSES.txt](https://github.com/TheDelta/Trayward/releases/latest/download/THIRD-PARTY-LICENSES.txt);
 Settings → About → **Licenses** opens the one of your version). Their
 licenses are MIT or Apache-2.0 (two have another permissive one: `foldhash` Zlib, and
 `unicode-ident`, used only while compiling, Unicode-3.0).

@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the idea! Please check the [existing issues](https://github.com/TheDelta/trayward/issues) first.
-        Not sure yet or want to talk it through? Start a [discussion](https://github.com/TheDelta/trayward/discussions) instead.
+        Thanks for the idea! Please check the [existing issues](https://github.com/TheDelta/Trayward/issues) first.
+        Not sure yet or want to talk it through? Start a [discussion](https://github.com/TheDelta/Trayward/discussions) instead.
 
   - type: textarea
     id: problem

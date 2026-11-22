@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn links_go_to_the_project_in_cargo_toml() {
         assert_eq!(crate::update::REPO_URL, env!("CARGO_PKG_REPOSITORY"));
-        assert_eq!(url("Usage bars"), "https://github.com/TheDelta/trayward/blob/main/docs/settings.md#usage-bars");
+        assert_eq!(url("Usage bars"), "https://github.com/TheDelta/Trayward/blob/main/docs/settings.md#usage-bars");
         assert_ne!(crate::app::VERSION, "0.0.0");
     }
 
