@@ -113,6 +113,8 @@ jobs:
   rust:
     name: Rust (${{ matrix.role }})
     runs-on: windows-2025
+    # A run takes about 5 minutes; a test that hangs ends it here, not after GitHub's 6 hours
+    timeout-minutes: 30
     defaults:
       run:
         shell: bash # Git Bash; PowerShell is the default on Windows
@@ -160,7 +162,7 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.9.1
 
-      # The same tests, measured; lcov.info is for SonarQube Cloud (sonar.yaml), whose
+      # The same tests, measured; lcov.info is for SonarQube Cloud (the job below), whose
       # scanner runs on Linux: the files as paths relative to the repository
       - name: Tests (with coverage)
         if: matrix.role == 'newest'
