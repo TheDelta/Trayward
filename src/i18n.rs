@@ -15,7 +15,6 @@ pub use trayward_core::i18n::take_untranslated;
 const TABLES: &[Table] = &[
     crate::app::DE,
     crate::flyout::DE,
-    crate::help::DE,
     crate::menu::DE,
     crate::settings_window::DE,
     crate::stats_window::DE,
