@@ -170,6 +170,7 @@ words:
   - pythonsecurity
   - pyupgrade
   - Qube
+  - rawfile
   - rayward
   - recv
   - redhat
@@ -219,6 +220,7 @@ words:
   - toks
   - Toolhelp
   - toolu
+  - tostring
   - Trayward
   - trayward
   - Traywards
