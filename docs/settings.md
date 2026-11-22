@@ -73,7 +73,9 @@ Where the widget sits on the taskbar.
   left-aligned. Windows keeps app buttons away from that button, so they no longer run under the
   widget. The widget fits itself to the button's width: narrower, it takes the whole button in the
   taskbar's colour so the weather doesn't show beside it; wider, it leaves out the usage bars (even
-  with Usage bars on Always), then the system monitor, and goes slim if that's not enough.
+  with Usage bars on Always), then the system monitor's columns one by one (network and disk
+  first, CPU, memory and GPU last), and goes slim if that's not enough. The card then says how
+  wide the button is, what all of it would need, and what's left out; Tray shows all of it.
 
 **Widgets** needs Widgets switched on: Windows Settings → Personalization → Taskbar →
 **Widgets**. Without it, Trayward goes back next to the tray. Trayward covers the button, so the
@@ -402,7 +404,9 @@ values below. Switching it off keeps which values you picked.
 
 It's read once a second while it's on, and not at all while it's off; nothing leaves the PC. The
 widget's tooltip shows each value in detail. From 90 % a percentage (or memory in GB that full)
-turns amber, from 95 % red. The slim display leaves the monitor out. Details:
+turns amber, from 95 % red. The slim display leaves the monitor out. On the Widgets button
+([Position](#position)), values that don't fit are left out a column at a time, and this card
+says which. Details:
 [System monitor](how-it-works.md#system-monitor).
 
 ### CPU

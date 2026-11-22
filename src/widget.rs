@@ -1001,12 +1001,20 @@ impl Widgets {
         &self.displays
     }
 
-    /// Whether a widget is shown on a taskbar other than the main one.
     /// UI Automation found Windows' Widgets button on a taskbar.
     pub fn widgets_button(&self) -> bool {
         self.edges.iter().any(|e| e.widgets.is_some())
     }
 
+    /// What a widget on the Widgets button left out to fit, if anything: the main
+    /// taskbar's first.
+    pub fn fit(&self) -> Option<Fit> {
+        let short = |b: &&Bar| b.fit.as_ref().is_some_and(Fit::short);
+        let bar = self.bars.iter().filter(short).find(|b| b.main).or_else(|| self.bars.iter().find(short));
+        bar.and_then(|b| b.fit.clone())
+    }
+
+    /// Whether a widget is shown on a taskbar other than the main one.
     pub fn beyond_main(&self) -> bool {
         self.bars.iter().any(|b| !b.main)
     }
@@ -1104,6 +1112,59 @@ struct Bar {
     sampled: Option<(std::time::Instant, Color)>,
     /// On a side taskbar: two lines last time, not a column.
     lines: bool,
+    /// On the Widgets button: what it left out to fit.
+    fit: Option<Fit>,
+}
+
+/// What the widget left out to fit onto the Widgets button, for the settings.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Fit {
+    /// The button's width, and what the widget would need for all of it (DIPs).
+    pub room: i32,
+    pub full: i32,
+    /// The usage bars, wanted always, left out.
+    pub bars: bool,
+    /// The system monitor's values left out, by their labels in the widget.
+    pub values: Vec<&'static str>,
+    /// Slim instead, the last way (without the system monitor, and more).
+    pub slim: bool,
+}
+
+impl Fit {
+    /// Whether anything was left out.
+    pub fn short(&self) -> bool {
+        self.bars || self.slim || !self.values.is_empty()
+    }
+}
+
+/// Makes `m` fit into `room` pixels on the Widgets button, `need` saying how wide it
+/// gets: first without the bars (even when they're always wanted), then without the
+/// system monitor's columns one at a time from the left (network and disk go before
+/// CPU, memory and GPU), and only then slim, as if chosen in the settings. Says what
+/// it left out; chosen slim, nothing.
+fn fit(m: &mut Model, room: i32, need: impl Fn(&Model) -> i32) -> Fit {
+    let mut fit = Fit { room, full: need(m), ..Fit::default() };
+    if m.slim.is_some() || fit.full <= room {
+        return fit;
+    }
+    if m.bars {
+        m.bars = false;
+        fit.bars = true;
+    }
+    while need(m) > room {
+        let Some(mon) = m.monitor.as_mut().filter(|mon| !mon.columns.is_empty()) else { break };
+        let column = mon.columns.remove(0);
+        fit.values.extend(column.iter().map(|c| c.label));
+        if mon.columns.is_empty() {
+            m.monitor = None;
+        }
+    }
+    if need(m) > room {
+        m.slim = Some(m.turn % slim_turns(m).max(1));
+        (m.shine, m.pinned, m.monitor) = (None, None, None);
+        fit.slim = true;
+    }
+    fit
 }
 
 impl Bar {
@@ -1126,7 +1187,7 @@ impl Bar {
             )
         }
         .ok()?;
-        Some(Bar { hwnd, taskbar, main, drawn: None, pos: (0, 0, 0, 0), sampled: None, lines: false })
+        Some(Bar { hwnd, taskbar, main, drawn: None, pos: (0, 0, 0, 0), sampled: None, lines: false, fit: None })
     }
 
     fn alive(&self) -> bool {
@@ -1244,22 +1305,14 @@ impl Bar {
             let solid = opts.solid || slot.is_some();
             model.background = if solid { Some(self.taskbar_color(tray.left + 2, tb.bottom - 2)) } else { None };
 
-            // Too wide for the Widgets button: first without the bars (even when they're
-            // always wanted), then without the system monitor, and only then slim, as if
-            // chosen in the settings (the slim widget leaves out the monitor too, and more).
-            if let Some((left, right)) = slot {
+            // Too wide for the Widgets button: left out step by step (`fit`), in pixels,
+            // then said in DIPs for the settings.
+            self.fit = slot.map(|(left, right)| {
                 let need = |m: &Model| render(None, m, h as f32 / scale).map_or(0, |w| (w * scale).ceil() as i32);
-                if model.slim.is_none() && model.bars && need(&model) > right - left {
-                    model.bars = false;
-                }
-                if model.slim.is_none() && model.monitor.is_some() && need(&model) > right - left {
-                    model.monitor = None;
-                }
-                if model.slim.is_none() && need(&model) > right - left {
-                    model.slim = Some(model.turn % slim_turns(&model).max(1));
-                    (model.shine, model.pinned, model.monitor) = (None, None, None);
-                }
-            }
+                let fitted = fit(&mut model, right - left, need);
+                let dips = |px: i32| (px as f32 / scale).round() as i32;
+                Fit { room: dips(fitted.room), full: dips(fitted.full), ..fitted }
+            });
 
             // On the Widgets button, at least as wide as it: the whole button is the widget's.
             let room = slot.map_or(0, |(left, right)| right - left);
@@ -1313,6 +1366,7 @@ impl Bar {
             let width = tb.right - tb.left;
             let gap = (2.0 * scale) as i32;
 
+            self.fit = None;
             let mut model = model.clone();
             (model.bars, model.slim, model.shine, model.pinned) = (false, None, None, None);
             model.background = if opts.solid { Some(self.taskbar_color(tb.right - 2, tray_top + 2)) } else { None };
@@ -1477,6 +1531,42 @@ mod tests {
         assert_eq!(slot_x(0, 190, 210, 0, 3840), 0);
         // Never off the taskbar.
         assert_eq!(slot_x(10, 50, 300, 0, 200), 0);
+    }
+
+    #[test]
+    fn makes_room_on_the_widgets_button_one_column_at_a_time() {
+        let cell = |label| Cell { label, value: "1%".into(), widest: &["100%"], level: None, history: vec![] };
+        let columns = vec![vec![cell("↑"), cell("↓")], vec![cell("R"), cell("W")], vec![cell("CPU"), cell("GPU")]];
+        let m = Model { monitor: Some(Monitor { columns }), bars: false, ..model() };
+        let need = |m: &Model| render(None, m, 48.0).map_or(0, |w| w.ceil() as i32);
+        let fitted = |m: &Model, room| {
+            let mut m = m.clone();
+            let f = fit(&mut m, room, need);
+            (m, f)
+        };
+        // Room for all of it: nothing left out.
+        let all = need(&m);
+        let (same, f) = fitted(&m, all);
+        assert!(!f.short() && same == m && (f.room, f.full) == (all, all));
+        // A little short: only the network's column goes...
+        let (less, f) = fitted(&m, all - 1);
+        assert_eq!((f.values.as_slice(), f.slim), (&["↑", "↓"][..], false));
+        assert_eq!(less.monitor.map(|mon| mon.columns.len()), Some(2));
+        // ...shorter still, the disk's too; CPU and GPU stay.
+        let cpu = Model { monitor: Some(Monitor { columns: vec![vec![cell("CPU"), cell("GPU")]] }), ..m.clone() };
+        let (_, f) = fitted(&m, need(&cpu));
+        assert_eq!(f.values, ["↑", "↓", "R", "W"]);
+        // Too short even without the monitor: slim.
+        let bare = Model { monitor: None, ..m.clone() };
+        let (slim, f) = fitted(&m, need(&bare) - 1);
+        assert!(f.slim && slim.slim.is_some() && slim.monitor.is_none());
+        // Bars that are always wanted go first.
+        let bars = Model { bars: true, ..m.clone() };
+        let (without, f) = fitted(&bars, all);
+        assert!(f.bars && !without.bars && f.values.is_empty() && !f.slim);
+        // Slim chosen in the settings: nothing to say.
+        let chosen = Model { slim: Some(0), ..m.clone() };
+        assert!(!fitted(&chosen, 1).1.short());
     }
 
     fn model() -> Model {
@@ -1794,6 +1884,7 @@ mod tests {
             pos: (0, 0, 0, 0),
             sampled: None,
             lines: false,
+            fit: None,
         });
         assert!(w.beyond_main() && w.hwnds() == [HWND::default()]);
         let opts = Options {
@@ -1851,6 +1942,7 @@ mod tests {
                     pos: (0, 0, 0, 0),
                     sampled: None,
                     lines: false,
+                    fit: None,
                 };
                 bar.update(&wide, &o, e);
                 bar.update(&wide, &o, e);
@@ -1868,6 +1960,7 @@ mod tests {
             pos: (0, 0, 0, 0),
             sampled: None,
             lines: false,
+            fit: None,
         };
         let first = bar.taskbar_color(rect.left, rect.top);
         assert_eq!(bar.taskbar_color(rect.right - 1, rect.bottom - 1), first);
@@ -1918,6 +2011,7 @@ mod tests {
                     pos: (0, 0, 0, 0),
                     sampled: None,
                     lines: false,
+                    fit: None,
                 };
                 // Narrow: a column.
                 let narrow = RECT { left: 0, top: 0, right: (48.0 * scale) as i32, bottom: 1000 };

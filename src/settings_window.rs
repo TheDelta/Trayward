@@ -141,6 +141,8 @@ pub struct Model {
     pub place: settings::Place,
     /// Windows shows its Widgets button (UI Automation found it).
     pub widgets_button: bool,
+    /// What the widget left out to fit onto the Widgets button, if anything.
+    pub fit: Option<crate::widget::Fit>,
     /// The plan has a limit of its own for Fable (the usage endpoint reports one).
     pub fable_found: bool,
     /// Claude Code is used on this PC (its folder exists).
@@ -211,6 +213,8 @@ pub enum Tone {
     Plain,
     /// Under way: connecting, sending, checking (blue).
     Busy,
+    /// Worth knowing, nothing wrong: what a choice leaves out (blue, like Busy).
+    Info,
     /// Works (green).
     Good,
     /// Needs a look (yellow).
@@ -234,6 +238,49 @@ impl Status {
     pub fn bad(text: impl Into<String>) -> Status {
         Status::new(Tone::Bad, text)
     }
+}
+
+/// What didn't fit onto the Widgets button, in blue (nothing's wrong): its width, what all
+/// of it would need, what's left out (or that the widget went slim), and where all of it shows.
+fn fit_status(fit: &crate::widget::Fit) -> Status {
+    if fit.slim {
+        let text = f(
+            "Room for {0} of {1} px on the Widgets button: slim instead · Tray shows all of it",
+            &[&fit.room, &fit.full],
+        );
+        return Status::new(Tone::Info, text);
+    }
+    let mut out: Vec<&str> = Vec::new();
+    if fit.bars {
+        out.push(t("usage bars"));
+    }
+    for label in &fit.values {
+        let name = match *label {
+            "↑" | "↓" => t("network"),
+            "Disk" | "R" | "W" => t("disk"),
+            other => other,
+        };
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    let text = f(
+        "Room for {0} of {1} px on the Widgets button: without {2} · Tray shows all of it",
+        &[&fit.room, &fit.full, &out.join(", ")],
+    );
+    Status::new(Tone::Info, text)
+}
+
+/// What the Position card says about the Widgets button's room, when something didn't fit.
+fn position_fit(m: &Model) -> Option<Status> {
+    m.fit.as_ref().filter(|_| m.place == settings::Place::Widgets).map(fit_status)
+}
+
+/// The same on the system monitor's card, where its values are switched: when some of
+/// them were left out, or all of it for the slim widget.
+fn monitor_fit(m: &Model) -> Option<Status> {
+    let on_button = m.prefs.monitor.on && m.place == settings::Place::Widgets;
+    m.fit.as_ref().filter(|fit| on_button && (fit.slim || !fit.values.is_empty())).map(fit_status)
 }
 
 /// How `glab` and `gh` stand, for the card of merge and pull requests. Switched off,
@@ -397,7 +444,7 @@ fn tool_status(forge: crate::forge::Forge, tool: &crate::forge::Tool) -> Status 
 fn tone_color(pal: &Palette, tone: Tone) -> Color {
     match tone {
         Tone::Plain => pal.text_dim,
-        Tone::Busy => pal.accent,
+        Tone::Busy | Tone::Info => pal.accent,
         Tone::Good => pal.done,
         Tone::Warn => pal.warn,
         Tone::Bad => pal.crit,
@@ -1208,11 +1255,16 @@ fn render<'a>(
                 ("Tray".to_string(), Action::Place(Place::Tray), m.place == Place::Tray),
                 ("Widgets".to_string(), Action::Place(Place::Widgets), m.place == Place::Widgets),
             ];
-            let desc = match (m.place, m.widgets_button) {
-                (Place::Widgets, false) => "Switch on Widgets in Windows first",
-                _ => "Widgets: on its button, apps keep away",
+            let desc = match (m.place, m.widgets_button, position_fit(m)) {
+                // English: the card translates it (the status is translated already).
+                (Place::Widgets, false, _) => "Switch on Widgets in Windows first".to_string(),
+                (_, _, Some(status)) => {
+                    l.desc_style = Some(DescStyle { color: tone_color(pal, status.tone), spin: None });
+                    status.text
+                }
+                _ => "Widgets: on its button, apps keep away".to_string(),
             };
-            y += l.choice_card_h(y, H, "Position", desc, &options)?;
+            y += l.choice_card_h(y, H, "Position", &desc, &options)?;
             let options = [
                 ("Normal".to_string(), Action::Slim(false), !p.slim),
                 ("Slim".to_string(), Action::Slim(true), p.slim),
@@ -1283,7 +1335,14 @@ fn render<'a>(
                 ]
             };
             let h = DISPLAY_CARD_H;
-            y += l.toggle_card_h(y, h, "System monitor", "Your PC's load in the taskbar", mon.on, Action::MonitorOn)?;
+            let desc = match monitor_fit(m) {
+                Some(status) => {
+                    l.desc_style = Some(DescStyle { color: tone_color(pal, status.tone), spin: None });
+                    status.text
+                }
+                None => "Your PC's load in the taskbar".to_string(),
+            };
+            y += l.toggle_card_h(y, h, "System monitor", &desc, mon.on, Action::MonitorOn)?;
             if !mon.on {
                 return l.finish();
             }
@@ -2319,6 +2378,11 @@ pub const DE: &[(&str, &str)] = &[
     ("Extensions", "Erweiterungen"),
     ("Switched on, an extension adds its page to the list on the left, or its part of the flyout.", "Eingeschaltet fügt eine Erweiterung ihre Seite links in die Liste ein, oder ihren Teil des Flyouts."),
     ("Your PC's load in the taskbar", "Die Auslastung des PCs in der Taskleiste"),
+    ("Room for {0} of {1} px on the Widgets button: without {2} · Tray shows all of it", "Platz für {0} von {1} px auf der Widgets-Schaltfläche: ohne {2} · Infobereich zeigt alles"),
+    ("Room for {0} of {1} px on the Widgets button: slim instead · Tray shows all of it", "Platz für {0} von {1} px auf der Widgets-Schaltfläche: stattdessen schmal · Infobereich zeigt alles"),
+    ("usage bars", "Nutzungsbalken"),
+    ("network", "Netzwerk"),
+    ("disk", "Datenträger"),
     ("CPU", "CPU"),
     ("Processor use", "Prozessorauslastung"),
     ("Memory (RAM)", "Arbeitsspeicher (RAM)"),
@@ -2592,6 +2656,7 @@ mod tests {
             solid: false,
             place: settings::Place::Tray,
             widgets_button: false,
+            fit: None,
             taskbars: Taskbars::Chosen,
             chosen: vec!["a".into()],
             displays: vec![
@@ -3078,6 +3143,36 @@ mod tests {
         assert!(!drawn.tips.is_empty());
     }
 
+    /// The widget on the Widgets button without the bars, the network and the disk.
+    fn short() -> Option<crate::widget::Fit> {
+        let values = vec!["↑", "↓", "R", "W"];
+        Some(crate::widget::Fit { room: 180, full: 262, bars: true, values, slim: false })
+    }
+
+    #[test]
+    fn says_what_the_widgets_button_has_no_room_for() {
+        i18n::set(Choice::English);
+        let fit = short().unwrap();
+        let s = fit_status(&fit);
+        assert_eq!(s.tone, Tone::Info);
+        let text =
+            "Room for 180 of 262 px on the Widgets button: without usage bars, network, disk · Tray shows all of it";
+        assert_eq!(s.text, text);
+        let slim = fit_status(&crate::widget::Fit { slim: true, ..fit });
+        assert_eq!(slim.text, "Room for 180 of 262 px on the Widgets button: slim instead · Tray shows all of it");
+        // On the Widgets button, both cards say it...
+        let button = Model { place: settings::Place::Widgets, widgets_button: true, fit: short(), ..model() };
+        assert!(position_fit(&button).is_some() && monitor_fit(&button).is_some());
+        // ...not in the tray, and the monitor's card not about the bars alone, or while it's off.
+        let tray = Model { place: settings::Place::Tray, ..button.clone() };
+        assert!(position_fit(&tray).is_none() && monitor_fit(&tray).is_none());
+        let bars = Model { fit: short().map(|f| crate::widget::Fit { values: Vec::new(), ..f }), ..button.clone() };
+        assert!(position_fit(&bars).is_some() && monitor_fit(&bars).is_none());
+        let mut off = button.clone();
+        off.prefs.monitor.on = false;
+        assert!(monitor_fit(&off).is_none());
+    }
+
     #[test]
     fn each_state_of_the_cards_is_drawn() {
         use crate::gpg::{Check, Missing};
@@ -3090,6 +3185,17 @@ mod tests {
             (page::GENERAL, Model { autostart: false, interval: 600, ..model() }),
             (page::TASKBAR, Model { place: settings::Place::Widgets, widgets_button: false, ..model() }),
             (page::TASKBAR, Model { place: settings::Place::Widgets, widgets_button: true, ..model() }),
+            // Not all of it fits onto the Widgets button: said on both pages.
+            (page::TASKBAR, Model { place: settings::Place::Widgets, widgets_button: true, fit: short(), ..model() }),
+            (page::SYSTEM_MONITOR, Model { place: settings::Place::Widgets, fit: short(), ..model() }),
+            (
+                page::SYSTEM_MONITOR,
+                Model {
+                    place: settings::Place::Widgets,
+                    fit: short().map(|f| crate::widget::Fit { slim: true, ..f }),
+                    ..model()
+                },
+            ),
             (
                 page::TASKBAR,
                 Model { taskbars: Taskbars::All, more_monitors: false, bars: Bars::Never, solid: true, ..model() },
