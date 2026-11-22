@@ -32,6 +32,25 @@ release's notes on GitHub are its section here.
     🔒 Security, 📚 Documentation, 📦 Dependencies, 🧰 Maintenance.
 -->
 
+## [0.2.0] - 2026-11-22
+
+### 🚀 Features
+
+- **settings:** Where trayward.exe is, on the About page, with its folder to open by [@TheDelta](https://github.com/TheDelta) in [#20](https://github.com/TheDelta/Trayward/pull/20)
+
+### 🐛 Fixes
+
+- **settings:** Each short help text once, with its German beside it by [@TheDelta](https://github.com/TheDelta) in [#22](https://github.com/TheDelta/Trayward/pull/22)
+
+### 📚 Documentation
+
+- The Scorecard badge and link name the repository as GitHub spells it by [@TheDelta](https://github.com/TheDelta) in [#21](https://github.com/TheDelta/Trayward/pull/21)
+
+### 🧰 Maintenance
+
+- **release:** The release commit is made through the API, so GitHub signs it by [@TheDelta](https://github.com/TheDelta) in [#19](https://github.com/TheDelta/Trayward/pull/19)
+- All German in one file per crate, i18n/de.rs by [@TheDelta](https://github.com/TheDelta) in [#23](https://github.com/TheDelta/Trayward/pull/23)
+
 ## [0.1.0] - 2026-11-22
 
 The first public release: your coding agents' usage limits and sessions in the taskbar.
@@ -131,5 +150,6 @@ and OpenSSF Scorecard, and the exe built by GitHub Actions with a provenance att
 - **Demo mode** (`--demo`): made-up sessions, usage and statistics, for screenshots
   and trying it out, as a Max or an Ultra plan.
 
-[Unreleased]: https://github.com/TheDelta/trayward/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/TheDelta/trayward/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TheDelta/trayward/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TheDelta/trayward/releases/tag/v0.1.0
